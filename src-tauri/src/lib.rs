@@ -10,15 +10,39 @@ mod network;
 mod session;
 
 #[tauri::command]
-fn start_host(server_url: String) -> Result<(), String> {
-    let host_script = std::env::current_dir()
+fn start_host(server_url: String, code: String) -> Result<(), String> {
+    let exe_dir = std::env::current_exe()
         .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or("Cannot get parent dir")?
+        .to_path_buf();
+
+    let host_script = exe_dir
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
         .join("host")
         .join("host.js");
+
+    let host_script = if host_script.exists() {
+        host_script
+    } else {
+        let fallback = std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join("..")
+            .join("host")
+            .join("host.js");
+        if !fallback.exists() {
+            return Err(format!("Host script not found"));
+        }
+        fallback
+    };
 
     let child = Command::new("node")
         .arg(&host_script)
         .env("SIGNALING_URL", &server_url)
+        .env("SIGNALING_CODE", &code)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()

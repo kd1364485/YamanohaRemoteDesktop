@@ -1,22 +1,28 @@
 import { WebSocket } from "ws";
 import screenshot from "screenshot-desktop";
+import sharp from "sharp";
 import { mouse, keyboard, Button, Key } from "@nut-tree-fork/nut-js";
 
 const SERVER_URL = process.env.SIGNALING_URL || "ws://localhost:8080";
+const HOST_CODE = process.env.SIGNALING_CODE || null;
+
+// --- 画質・パフォーマンス設定（ラグ対策） ---
+const TARGET_WIDTH = Number(process.env.STREAM_WIDTH) || 1280; // 送信画像の横幅（縮小）
+const JPEG_QUALITY = Number(process.env.STREAM_QUALITY) || 55; // JPEG品質 0-100
+const TARGET_FPS = Number(process.env.STREAM_FPS) || 15;       // 目標フレームレート
 
 mouse.config.mouseSpeed = 0;
 keyboard.config.autoDelayMs = 0;
 
 let ws;
 let isStreaming = false;
-let streamInterval;
 
 function connect() {
   ws = new WebSocket(SERVER_URL);
 
   ws.on("open", () => {
     console.log("Connected to signaling server");
-    ws.send(JSON.stringify({ type: "host" }));
+    ws.send(JSON.stringify({ type: "host", code: HOST_CODE }));
   });
 
   ws.on("message", async (raw) => {
@@ -63,26 +69,52 @@ async function startStreaming() {
   if (isStreaming) return;
   isStreaming = true;
 
-  const interval = 1000 / 15;
+  const minFrameMs = 1000 / TARGET_FPS;
 
-  streamInterval = setInterval(async () => {
-    if (!ws || ws.readyState !== ws.OPEN) return;
+  // 逐次ループ: 1フレームのキャプチャ→圧縮→送信が完了してから次へ進む。
+  // setIntervalと違い処理が詰まらず、遅延の蓄積を防ぐ。
+  while (isStreaming) {
+    const frameStart = Date.now();
+
+    if (!ws || ws.readyState !== ws.OPEN) {
+      await sleep(50);
+      continue;
+    }
+
+    // 送信バッファが詰まっている（前フレームが送り切れていない）ら、
+    // 新しいフレームを送らずスキップして遅延の蓄積を防ぐ。
+    if (ws.bufferedAmount > 1_000_000) {
+      await sleep(minFrameMs);
+      continue;
+    }
 
     try {
-      const img = await screenshot({ format: "jpg" });
-      ws.send(JSON.stringify({ type: "frame", data: img.toString("base64") }));
+      // PNG形式で取得し、sharpで縮小+JPEG圧縮（データ量を大幅削減）
+      const raw = await screenshot({ format: "png" });
+      const jpeg = await sharp(raw)
+        .resize({ width: TARGET_WIDTH, withoutEnlargement: true })
+        .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
+        .toBuffer();
+
+      ws.send(JSON.stringify({ type: "frame", data: jpeg.toString("base64") }));
     } catch (err) {
       console.error("Capture error:", err.message);
     }
-  }, interval);
+
+    // フレームレート上限を超えないよう待機
+    const elapsed = Date.now() - frameStart;
+    if (elapsed < minFrameMs) {
+      await sleep(minFrameMs - elapsed);
+    }
+  }
 }
 
 function stopStreaming() {
   isStreaming = false;
-  if (streamInterval) {
-    clearInterval(streamInterval);
-    streamInterval = null;
-  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function handleInput(msg) {
@@ -92,13 +124,30 @@ async function handleInput(msg) {
         await mouse.setPosition({ x: msg.x, y: msg.y });
         break;
 
+      case "mouse-move-rel": {
+        // 現在位置からの相対移動（スマホのトラックパッド操作用）
+        const pos = await mouse.getPosition();
+        await mouse.setPosition({ x: pos.x + msg.dx, y: pos.y + msg.dy });
+        break;
+      }
+
       case "mouse-click":
-        await mouse.setPosition({ x: msg.x, y: msg.y });
-        if (msg.button === "left") {
-          await mouse.click(Button.LEFT);
-        } else if (msg.button === "right") {
-          await mouse.click(Button.RIGHT);
+        // 座標が指定されていれば移動してからクリック、なければ現在位置でクリック
+        if (typeof msg.x === "number" && typeof msg.y === "number") {
+          await mouse.setPosition({ x: msg.x, y: msg.y });
         }
+        if (msg.button === "right") {
+          await mouse.click(Button.RIGHT);
+        } else {
+          await mouse.click(Button.LEFT);
+        }
+        break;
+
+      case "mouse-double-click":
+        if (typeof msg.x === "number" && typeof msg.y === "number") {
+          await mouse.setPosition({ x: msg.x, y: msg.y });
+        }
+        await mouse.doubleClick(msg.button === "right" ? Button.RIGHT : Button.LEFT);
         break;
 
       case "mouse-down":
@@ -111,9 +160,16 @@ async function handleInput(msg) {
         else if (msg.button === "right") await mouse.releaseButton(Button.RIGHT);
         break;
 
-      case "mouse-scroll":
-        await mouse.scrollDown(msg.deltaY > 0 ? msg.deltaY : -msg.deltaY);
+      case "mouse-scroll": {
+        // deltaY > 0 で下方向、< 0 で上方向。符号で向きを切り替える。
+        const amount = Math.max(1, Math.round(Math.abs(msg.deltaY)));
+        if (msg.deltaY > 0) {
+          await mouse.scrollDown(amount);
+        } else if (msg.deltaY < 0) {
+          await mouse.scrollUp(amount);
+        }
         break;
+      }
 
       case "key":
         const key = mapKey(msg.key);

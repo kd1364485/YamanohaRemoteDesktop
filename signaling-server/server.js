@@ -33,7 +33,7 @@ wss.on("connection", (ws) => {
     switch (msg.type) {
       case "host": {
         role = "host";
-        code = generateCode();
+        code = msg.code ? String(msg.code).toUpperCase() : generateCode();
         hosts.set(code, ws);
         ws._code = code;
         sendJSON(ws, { type: "host-ready", code });

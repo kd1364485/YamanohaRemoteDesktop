@@ -1,27 +1,40 @@
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static HOST_PROCESS: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
+
 mod screen_capture;
 mod input_control;
 mod network;
 mod session;
 
-use serde::Serialize;
+#[tauri::command]
+fn start_host(server_url: String) -> Result<(), String> {
+    let host_script = std::env::current_dir()
+        .map_err(|e| e.to_string())?
+        .join("host")
+        .join("host.js");
 
-#[derive(Serialize)]
-struct SessionInfo {
-    session_id: String,
-    status: String,
+    let child = Command::new("node")
+        .arg(&host_script)
+        .env("SIGNALING_URL", &server_url)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Failed to start host process: {}", e))?;
+
+    *HOST_PROCESS.lock().unwrap() = Some(child);
+    Ok(())
 }
 
 #[tauri::command]
-fn get_session_info() -> SessionInfo {
-    SessionInfo {
-        session_id: String::new(),
-        status: "idle".to_string(),
+fn stop_host() -> Result<(), String> {
+    let mut proc = HOST_PROCESS.lock().unwrap();
+    if let Some(mut child) = proc.take() {
+        child.kill().map_err(|e| format!("Failed to kill host: {}", e))?;
     }
-}
-
-#[tauri::command]
-fn start_host() -> Result<String, String> {
-    session::start_host_session()
+    Ok(())
 }
 
 #[tauri::command]
@@ -39,8 +52,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            get_session_info,
             start_host,
+            stop_host,
             connect_to_host,
             disconnect_session,
         ])

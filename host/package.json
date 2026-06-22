@@ -1,0 +1,14 @@
+{
+  "name": "yamanoha-host",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node host.js",
+    "dev": "node --watch host.js"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "screenshot-desktop": "^1.15.0",
+    "ws": "^8.18.0"
+  }
+}

@@ -10,10 +10,13 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "screenshot-desktop": "^1.15.4",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

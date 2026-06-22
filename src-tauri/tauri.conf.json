@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Synapse",
+  "productName": "YamanohaRemoteDesktop",
   "version": "0.1.0",
-  "identifier": "com.seiya.synapse",
+  "identifier": "com.seiya.yamanoha-remote-desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,9 +13,10 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Synapse",
-        "width": 800,
-        "height": 600
+        "title": "YamanohaRemoteDesktop",
+        "width": 1024,
+        "height": 720,
+        "resizable": true
       }
     ],
     "security": {

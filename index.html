@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ja" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Synapse</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body class="bg-[#050505] text-gray-100 min-h-screen flex flex-col">
+    <div class="flex-1 container mx-auto px-4 py-8 max-w-4xl">
+      <!-- ヘッダー -->
+      <header class="relative bg-gray-800 rounded-t-2xl border-t border-x border-white/10 px-6 py-4 flex items-center justify-center">
+        <h1 class="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#00F5D4] to-[#00D4AA]">
+          Synapse
+        </h1>
+        <button id="settings-btn" type="button" class="absolute right-6 p-2 hover:bg-gray-700 rounded-lg transition-colors">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </header>
+
+      <!-- タブ -->
+      <div class="bg-gray-800 border-x border-b border-white/10 px-6">
+        <div class="flex gap-4">
+          <button id="tab-chat" type="button" class="px-4 py-3 border-b-2 border-[#00F5D4] text-[#00F5D4] font-medium transition-colors">
+            AIチャット
+          </button>
+        </div>
+      </div>
+
+      <!-- メインコンテンツ -->
+      <main class="bg-gray-800 rounded-b-2xl border-x border-b border-white/10 p-8 shadow-2xl mb-8">
+        <!-- チャットタブ -->
+        <div id="chat-tab-content">
+          <div class="flex flex-col gap-4">
+            <div id="chat-messages" class="flex-1 min-h-96 max-h-96 overflow-y-auto p-4 bg-[rgba(15,15,20,0.6)] backdrop-blur-xl border border-white/10 rounded-lg space-y-4">
+              <!-- メッセージがここに動的に追加されます -->
+            </div>
+            <div class="flex flex-col gap-3">
+              <div class="flex gap-3">
+                <input id="api-key-input" type="password" placeholder="Gemini APIキー" class="flex-1 px-4 py-3 bg-gray-900 border border-white/10 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#00F5D4] focus:border-transparent transition-all duration-300" />
+                <select id="model-select" class="w-52 px-4 py-3 bg-gray-900 border border-white/10 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#00F5D4] focus:border-transparent transition-all duration-300 cursor-pointer">
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                  <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+                  <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+                  <option value="gemini-3-flash-preview">Gemini 3 Flash</option>
+                  <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                </select>
+              </div>
+              <div class="flex gap-3">
+                <input id="chat-input" type="text" placeholder="メッセージを入力..." class="flex-1 px-4 py-3 bg-gray-900 border border-white/10 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#00F5D4] focus:border-transparent transition-all duration-300" />
+                <button id="send-chat-btn" type="button" class="shrink-0 px-8 py-3 whitespace-nowrap bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25">
+                  送信
+                </button>
+              </div>
+            </div>
+            <div class="mt-2">
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" class="text-sm text-[#00F5D4] hover:text-[#00E6C6] hover:underline transition-colors duration-200">
+                👉 APIキーの取得方法（ここをクリック）
+              </a>
+            </div>
+            <p id="chat-status" class="text-center text-gray-300"></p>
+          </div>
+        </div>
+    </main>
+
+    <!-- ステータスバー -->
+    <footer class="container mx-auto max-w-4xl px-6 py-2 flex items-center justify-between text-sm">
+      <div class="flex items-center gap-4">
+        <span id="status-watch" class="flex items-center gap-2 text-gray-400">
+          <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+          未監視
+        </span>
+        <span id="status-index" class="flex items-center gap-2 text-gray-400">
+          <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+          未インデックス
+        </span>
+      </div>
+      <div id="selected-path-status" class="text-gray-400 truncate max-w-md">
+        選択されたパス: なし
+      </div>
+    </footer>
+
+    <!-- トースト通知コンテナ -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col gap-2"></div>
+
+    <!-- 設定モーダル -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+      <div class="bg-gray-800 rounded-2xl p-8 shadow-2xl border border-white/10 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-6">
+          <h2 class="text-2xl font-bold text-gray-100">設定</h2>
+          <button id="close-settings-btn" type="button" class="p-2 hover:bg-gray-700 rounded-lg transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- フォルダ選択・監視設定 -->
+        <div class="mb-8">
+          <h3 class="text-lg font-semibold mb-4 text-gray-100">フォルダ選択・監視設定</h3>
+          <div class="flex flex-col gap-4">
+            <div class="flex justify-center">
+              <button id="select-folder-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25">
+                フォルダを選択
+              </button>
+            </div>
+            <p id="selected-path" class="p-4 bg-gray-900 rounded-lg font-mono text-sm text-gray-300 break-all border border-white/10">
+              選択されたパス: なし
+            </p>
+            <div class="flex justify-center gap-4">
+              <button id="start-watch-btn" type="button" disabled class="px-6 py-3 min-w-40 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-lg hover:from-green-600 hover:to-emerald-600 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-green-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none">
+                監視開始
+              </button>
+              <button id="stop-watch-btn" type="button" disabled class="px-6 py-3 min-w-40 bg-gradient-to-r from-red-500 to-orange-500 text-white font-semibold rounded-lg hover:from-red-600 hover:to-orange-600 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-red-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none">
+                監視停止
+              </button>
+              <button id="build-index-btn" type="button" disabled class="px-6 py-3 min-w-40 bg-gradient-to-r from-indigo-500 to-cyan-500 text-white font-semibold rounded-lg hover:from-indigo-600 hover:to-cyan-600 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-indigo-500/25 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none">
+                インデックス構築
+              </button>
+            </div>
+            <p id="watch-status" class="text-center text-gray-300"></p>
+            <p id="index-status" class="text-center text-gray-300"></p>
+          </div>
+        </div>
+
+        <!-- 拡張子設定 -->
+        <div class="mb-8">
+          <h3 class="text-lg font-semibold mb-4 text-gray-100">拡張子設定</h3>
+          <div class="flex flex-col gap-4">
+            <div id="extensions-tags" class="flex flex-wrap gap-2 min-h-16 p-4 bg-gray-900 border border-white/10 rounded-lg">
+              <!-- タグがここに動的に追加されます -->
+            </div>
+            <div class="flex gap-2">
+              <input id="extension-input" type="text" placeholder="拡張子を入力（例: js）" class="flex-1 px-4 py-3 bg-gray-900 border border-white/10 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#00F5D4] focus:border-transparent transition-all duration-300" />
+              <button id="add-extension-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25">
+                追加
+              </button>
+            </div>
+            <div class="flex justify-center gap-4">
+              <button id="load-extensions-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25 min-w-40 text-center">
+                設定を読み込み
+              </button>
+              <button id="save-extensions-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25 min-w-40 text-center">
+                設定を保存
+              </button>
+            </div>
+            <p id="extensions-status" class="text-center text-gray-300"></p>
+          </div>
+        </div>
+
+        <!-- プンプト設定 -->
+        <div>
+          <h3 class="text-lg font-semibold mb-4 text-gray-100">プロンプト設定</h3>
+          <div class="flex flex-col gap-4">
+            <textarea id="prompt-input" placeholder="AIへのプロンプトを入力..." class="w-full h-48 px-4 py-3 bg-gray-900 border border-white/10 rounded-lg text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#00F5D4] focus:border-transparent transition-all duration-300 resize-none"></textarea>
+            <div class="flex justify-center gap-4">
+              <button id="load-prompt-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25 min-w-40 text-center">
+                設定を読み込み
+              </button>
+              <button id="save-prompt-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-[#00F5D4] to-[#00D4AA] text-black font-semibold rounded-lg hover:from-[#00E6C6] hover:to-[#00C4A0] transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-[#00F5D4]/25 min-w-40 text-center">
+                設定を保存
+              </button>
+              <button id="reset-prompt-btn" type="button" class="px-6 py-3 bg-gradient-to-r from-gray-500 to-gray-600 text-white font-semibold rounded-lg hover:from-gray-600 hover:to-gray-700 transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-gray-500/25 min-w-40 text-center">
+                デフォルトに戻す
+              </button>
+            </div>
+            <p id="prompt-status" class="text-center text-gray-300"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

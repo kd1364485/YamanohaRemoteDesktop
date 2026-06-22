@@ -7,16 +7,19 @@ const wss = new WebSocketServer({ port: PORT });
 const hosts = new Map();
 const clients = new Map();
 
+// 6桁の英数字コードを生成(接続する際に使用する合言葉)
 function generateCode() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
+// JSONを送信
 function sendJSON(ws, data) {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(data));
   }
 }
 
+// 接続時に実行
 wss.on("connection", (ws) => {
   let role = null;
   let code = null;
@@ -30,6 +33,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // メッセージタイプに応じて処理
     switch (msg.type) {
       case "host": {
         role = "host";

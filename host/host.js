@@ -4,12 +4,13 @@ import sharp from "sharp";
 import { mouse, keyboard, Button, Key } from "@nut-tree-fork/nut-js";
 
 const SERVER_URL = process.env.SIGNALING_URL || "ws://localhost:8080";
-const HOST_CODE = process.env.SIGNALING_CODE || null;
+const AUTH_TOKEN = process.env.SIGNALING_TOKEN || null;
+const DEVICE_NAME = process.env.SIGNALING_DEVICE_NAME || "PC";
 
 // --- 画質・パフォーマンス設定（ラグ対策） ---
 const TARGET_WIDTH = Number(process.env.STREAM_WIDTH) || 1280; // 送信画像の横幅（縮小）
 const JPEG_QUALITY = Number(process.env.STREAM_QUALITY) || 55; // JPEG品質 0-100
-const TARGET_FPS = Number(process.env.STREAM_FPS) || 15;       // 目標フレームレート
+const TARGET_FPS = Number(process.env.STREAM_FPS) || 30;       // 目標フレームレート
 
 mouse.config.mouseSpeed = 0;
 keyboard.config.autoDelayMs = 0;
@@ -22,7 +23,7 @@ function connect() {
 
   ws.on("open", () => {
     console.log("Connected to signaling server");
-    ws.send(JSON.stringify({ type: "host", code: HOST_CODE }));
+    ws.send(JSON.stringify({ type: "auth", token: AUTH_TOKEN }));
   });
 
   ws.on("message", async (raw) => {
@@ -34,8 +35,13 @@ function connect() {
     }
 
     switch (msg.type) {
+      case "auth-ok":
+        console.log(`Authenticated as ${msg.username}`);
+        ws.send(JSON.stringify({ type: "host", deviceName: DEVICE_NAME }));
+        break;
+
       case "host-ready":
-        console.log(`Host ready! Code: ${msg.code}`);
+        console.log(`Host ready! hostId: ${msg.hostId}, device: ${msg.deviceName}`);
         break;
 
       case "client-connected":
@@ -76,6 +82,7 @@ async function startStreaming() {
   while (isStreaming) {
     const frameStart = Date.now();
 
+    // WebSocketが開いていない場合、少し待機してから再試行
     if (!ws || ws.readyState !== ws.OPEN) {
       await sleep(50);
       continue;

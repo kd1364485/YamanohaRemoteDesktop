@@ -1,6 +1,12 @@
 // YamanohaRemoteDesktop - Frontend Entry Point
 
-type ViewId = "home-view" | "host-view" | "connect-view" | "remote-view";
+type ViewId = "login-view" | "register-view" | "home-view" | "host-view" | "connect-view" | "remote-view";
+
+type HostInfo = { hostId: string; deviceName: string };
+
+let authToken: string | null = localStorage.getItem("authToken");
+let authUsername: string | null = localStorage.getItem("authUsername");
+let listWs: WebSocket | null = null;
 
 // アクセス中のホスト名からサーバーURLを自動生成
 // 例: スマホが http://10.17.41.5:1420 でアクセス → ws://10.17.41.5:8080
@@ -14,25 +20,121 @@ const DEFAULT_SERVER_URL = buildDefaultServerUrl();
 
 let clientWs: WebSocket | null = null;
 
-function generateCode(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
-// ページ読み込み時にサーバーURL入力欄へ自動入力
+// ページ読み込み時にサーバーURL入力欄へ自動入力 + 認証状態チェック
 window.addEventListener("DOMContentLoaded", () => {
   const input = document.getElementById("server-url") as HTMLInputElement | null;
   if (input && !input.value.trim()) {
     input.value = DEFAULT_SERVER_URL;
   }
+
+  if (authToken && authUsername) {
+    showView("home-view");
+    const userEl = document.getElementById("logged-in-user");
+    if (userEl) userEl.textContent = authUsername;
+  } else {
+    showView("login-view");
+  }
+});
+
+// --- 認証機能 ---
+
+function getHttpBaseUrl(): string {
+  const hostname = window.location.hostname || "localhost";
+  const protocol = window.location.protocol === "https:" ? "https" : "http";
+  return `${protocol}://${hostname}:8080`;
+}
+
+async function apiRequest(endpoint: string, username: string, password: string): Promise<{ token?: string; username?: string; error?: string }> {
+  try {
+    const res = await fetch(`${getHttpBaseUrl()}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { error: data.error || "エラーが発生しました" };
+    return data;
+  } catch {
+    return { error: "サーバーに接続できません" };
+  }
+}
+
+function saveAuth(token: string, username: string): void {
+  authToken = token;
+  authUsername = username;
+  localStorage.setItem("authToken", token);
+  localStorage.setItem("authUsername", username);
+}
+
+function clearAuth(): void {
+  authToken = null;
+  authUsername = null;
+  localStorage.removeItem("authToken");
+  localStorage.removeItem("authUsername");
+}
+
+// ログインボタン
+document.getElementById("login-btn")?.addEventListener("click", async () => {
+  const username = (document.getElementById("login-username") as HTMLInputElement)?.value?.trim();
+  const password = (document.getElementById("login-password") as HTMLInputElement)?.value;
+  const errorEl = document.getElementById("login-error");
+
+  if (!username || !password) {
+    if (errorEl) { errorEl.textContent = "ユーザー名とパスワードを入力してください"; errorEl.classList.remove("hidden"); }
+    return;
+  }
+
+  const result = await apiRequest("/api/login", username, password);
+  if (result.error) {
+    if (errorEl) { errorEl.textContent = result.error; errorEl.classList.remove("hidden"); }
+    return;
+  }
+
+  if (errorEl) errorEl.classList.add("hidden");
+  saveAuth(result.token!, result.username!);
+  const userEl = document.getElementById("logged-in-user");
+  if (userEl) userEl.textContent = result.username!;
+  showView("home-view");
+});
+
+// 新規登録ボタン
+document.getElementById("register-btn")?.addEventListener("click", async () => {
+  const username = (document.getElementById("register-username") as HTMLInputElement)?.value?.trim();
+  const password = (document.getElementById("register-password") as HTMLInputElement)?.value;
+  const errorEl = document.getElementById("register-error");
+
+  if (!username || !password) {
+    if (errorEl) { errorEl.textContent = "ユーザー名とパスワードを入力してください"; errorEl.classList.remove("hidden"); }
+    return;
+  }
+
+  const result = await apiRequest("/api/register", username, password);
+  if (result.error) {
+    if (errorEl) { errorEl.textContent = result.error; errorEl.classList.remove("hidden"); }
+    return;
+  }
+
+  if (errorEl) errorEl.classList.add("hidden");
+  saveAuth(result.token!, result.username!);
+  const userEl = document.getElementById("logged-in-user");
+  if (userEl) userEl.textContent = result.username!;
+  showView("home-view");
+});
+
+// 画面切替ボタン
+document.getElementById("show-register-btn")?.addEventListener("click", () => showView("register-view"));
+document.getElementById("show-login-btn")?.addEventListener("click", () => showView("login-view"));
+
+// ログアウト
+document.getElementById("logout-btn")?.addEventListener("click", () => {
+  clearAuth();
+  if (clientWs) { clientWs.close(); clientWs = null; }
+  if (listWs) { listWs.close(); listWs = null; }
+  showView("login-view");
 });
 
 function showView(viewId: ViewId): void {
-  const views: ViewId[] = ["home-view", "host-view", "connect-view", "remote-view"];
+  const views: ViewId[] = ["login-view", "register-view", "home-view", "host-view", "connect-view", "remote-view"];
   for (const id of views) {
     const el = document.getElementById(id);
     if (el) {
@@ -58,20 +160,21 @@ function getServerUrl(): string {
 // --- Host mode ---
 
 document.getElementById("host-btn")?.addEventListener("click", async () => {
+  if (!authToken) { showView("login-view"); return; }
   showView("host-view");
   setConnectionStatus("ホスト待機中", "yellow");
 
   const serverUrl = getServerUrl();
-  const code = generateCode();
+  const deviceName = "PC";
 
-  // 接続コードを表示
+  // 接続コード表示エリアを待機中表示に変更
   const codeEl = document.getElementById("connection-code");
-  if (codeEl) codeEl.textContent = code;
+  if (codeEl) codeEl.textContent = "待機中...";
 
-  // host.js プロセスを起動（画面キャプチャ + 入力制御）。コードを渡して登録させる。
+  // host.js プロセスを起動（画面キャプチャ + 入力制御）。トークンを渡して登録させる。
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("start_host", { serverUrl, code });
+    await invoke("start_host", { serverUrl, token: authToken, deviceName });
   } catch (err) {
     console.error("Host start failed:", err);
     setConnectionStatus("エラー: host.js起動失敗", "red");
@@ -93,14 +196,96 @@ document.getElementById("cancel-host-btn")?.addEventListener("click", async () =
 // --- Client mode ---
 
 document.getElementById("connect-btn")?.addEventListener("click", () => {
+  if (!authToken) { showView("login-view"); return; }
   showView("connect-view");
+  fetchHostList();
 });
 
-document.getElementById("connect-submit-btn")?.addEventListener("click", () => {
-  const input = document.getElementById("code-input") as HTMLInputElement | null;
-  if (!input || !input.value.trim()) return;
+document.getElementById("refresh-hosts-btn")?.addEventListener("click", () => {
+  fetchHostList();
+});
 
-  const code = input.value.trim().toUpperCase();
+function fetchHostList(): void {
+  const serverUrl = getServerUrl();
+  const container = document.getElementById("host-list-container");
+  if (!container) return;
+
+  // 既存のリストをクリア
+  container.innerHTML = '<div class="text-center text-gray-400 py-4">読み込み中...</div>';
+
+  if (listWs) { listWs.close(); listWs = null; }
+
+  listWs = new WebSocket(serverUrl);
+
+  listWs.onopen = () => {
+    listWs?.send(JSON.stringify({ type: "auth", token: authToken }));
+  };
+
+  listWs.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    if (msg.type === "auth-ok") {
+      listWs?.send(JSON.stringify({ type: "list-hosts" }));
+      return;
+    }
+
+    if (msg.type === "host-list") {
+      renderHostList(msg.hosts as HostInfo[]);
+      listWs?.close();
+      listWs = null;
+      return;
+    }
+
+    if (msg.type === "error") {
+      container.innerHTML = `<div class="text-center text-red-400 py-4">${msg.message}</div>`;
+    }
+  };
+
+  listWs.onerror = () => {
+    container.innerHTML = '<div class="text-center text-red-400 py-4">サーバーに接続できません</div>';
+  };
+}
+
+function renderHostList(hosts: HostInfo[]): void {
+  const container = document.getElementById("host-list-container");
+  if (!container) return;
+
+  if (hosts.length === 0) {
+    container.innerHTML = `
+      <div class="text-center text-gray-400 py-8">
+        <p>オンラインのホストがいません</p>
+        <p class="text-sm mt-2">ホストPCで「このPCを共有」を起動してください</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = "";
+  for (const h of hosts) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "w-full px-4 py-3 bg-gray-900 hover:bg-gray-800 border border-white/10 hover:border-cyan-400/50 rounded-lg flex items-center gap-3 transition-all";
+    btn.innerHTML = `
+      <div class="w-10 h-10 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25" />
+        </svg>
+      </div>
+      <div class="flex-1 text-left">
+        <div class="text-gray-100 font-medium">${h.deviceName}</div>
+        <div class="text-xs text-green-400 flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>オンライン
+        </div>
+      </div>
+      <span class="text-cyan-400 text-sm">接続 →</span>
+    `;
+    btn.addEventListener("click", () => connectToHost(h.hostId));
+    container.appendChild(btn);
+  }
+}
+
+function connectToHost(hostId: string): void {
+  if (!authToken) { showView("login-view"); return; }
   const serverUrl = getServerUrl();
 
   setConnectionStatus("接続中...", "yellow");
@@ -108,7 +293,7 @@ document.getElementById("connect-submit-btn")?.addEventListener("click", () => {
   clientWs = new WebSocket(serverUrl);
 
   clientWs.onopen = () => {
-    clientWs?.send(JSON.stringify({ type: "connect", code }));
+    clientWs?.send(JSON.stringify({ type: "auth", token: authToken }));
   };
 
   clientWs.onmessage = (event) => {
@@ -116,6 +301,12 @@ document.getElementById("connect-submit-btn")?.addEventListener("click", () => {
     try {
       msg = JSON.parse(event.data);
     } catch {
+      return;
+    }
+
+    // 認証成功後、接続要求を送信
+    if (msg.type === "auth-ok") {
+      clientWs?.send(JSON.stringify({ type: "connect", hostId }));
       return;
     }
 
@@ -160,7 +351,7 @@ document.getElementById("connect-submit-btn")?.addEventListener("click", () => {
       setConnectionStatus("未接続", "gray");
     }
   };
-});
+}
 
 document.getElementById("back-btn")?.addEventListener("click", () => {
   showView("home-view");

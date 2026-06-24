@@ -10,7 +10,7 @@ mod network;
 mod session;
 
 #[tauri::command]
-fn start_host(server_url: String, code: String) -> Result<(), String> {
+fn start_host(server_url: String, token: String, device_name: String) -> Result<(), String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
@@ -42,7 +42,8 @@ fn start_host(server_url: String, code: String) -> Result<(), String> {
     let child = Command::new("node")
         .arg(&host_script)
         .env("SIGNALING_URL", &server_url)
-        .env("SIGNALING_CODE", &code)
+        .env("SIGNALING_TOKEN", &token)
+        .env("SIGNALING_DEVICE_NAME", &device_name)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()

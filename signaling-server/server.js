@@ -1,28 +1,132 @@
 import { WebSocketServer } from "ws";
+import http from "http";
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+import Database from "better-sqlite3";
 
 const PORT = process.env.PORT || 8080;
+const JWT_SECRET = process.env.JWT_SECRET || "yamanoha-remote-desktop-secret-change-me";
+const DB_PATH = process.env.DB_PATH || "data.db";
 
-const wss = new WebSocketServer({ port: PORT });
+// --- データベース初期化 ---
+const db = new Database(DB_PATH);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
 
+// --- インメモリ状態 ---
+// hosts: hostId -> { ws, userId, username, deviceName }
+// clients: hostId -> ws
 const hosts = new Map();
 const clients = new Map();
 
-// 6桁の英数字コードを生成(接続する際に使用する合言葉)
-function generateCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-// JSONを送信
 function sendJSON(ws, data) {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(data));
   }
 }
 
-// 接続時に実行
+function verifyToken(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+// JSONボディをパース
+function parseBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+// --- HTTPサーバー（認証API） ---
+const server = http.createServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // ユーザー登録
+  if (req.url === "/api/register" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body?.username || !body?.password) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "ユーザー名とパスワードが必要です" }));
+      return;
+    }
+
+    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(body.username);
+    if (existing) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "このユーザー名は既に使用されています" }));
+      return;
+    }
+
+    const hash = bcrypt.hashSync(body.password, 10);
+    const result = db.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").run(body.username, hash);
+    const token = jwt.sign({ userId: result.lastInsertRowid, username: body.username }, JWT_SECRET, { expiresIn: "7d" });
+
+    res.writeHead(201, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ token, username: body.username }));
+    return;
+  }
+
+  // ログイン
+  if (req.url === "/api/login" && req.method === "POST") {
+    const body = await parseBody(req);
+    if (!body?.username || !body?.password) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "ユーザー名とパスワードが必要です" }));
+      return;
+    }
+
+    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(body.username);
+    if (!user || !bcrypt.compareSync(body.password, user.password_hash)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "ユーザー名またはパスワードが間違っています" }));
+      return;
+    }
+
+    const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: "7d" });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ token, username: user.username }));
+    return;
+  }
+
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
+});
+
+// --- WebSocketサーバー（HTTPサーバーに統合） ---
+const wss = new WebSocketServer({ server });
+
 wss.on("connection", (ws) => {
   let role = null;
-  let code = null;
+  let userId = null;
+  let username = null;
+  let hostId = null;
+  let deviceName = null;
+  let authenticated = false;
 
   ws.on("message", (raw) => {
     let msg;
@@ -33,37 +137,69 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // メッセージタイプに応じて処理
+    // 最初のメッセージは認証
+    if (!authenticated) {
+      if (msg.type !== "auth") {
+        sendJSON(ws, { type: "error", message: "認証が必要です" });
+        ws.close();
+        return;
+      }
+      const payload = verifyToken(msg.token);
+      if (!payload) {
+        sendJSON(ws, { type: "error", message: "無効なトークンです" });
+        ws.close();
+        return;
+      }
+      authenticated = true;
+      userId = payload.userId;
+      username = payload.username;
+      sendJSON(ws, { type: "auth-ok", username });
+      return;
+    }
+
     switch (msg.type) {
       case "host": {
         role = "host";
-        code = msg.code ? String(msg.code).toUpperCase() : generateCode();
-        hosts.set(code, ws);
-        ws._code = code;
-        sendJSON(ws, { type: "host-ready", code });
-        console.log(`Host registered: ${code}`);
+        deviceName = msg.deviceName || "PC";
+        hostId = `host-${userId}-${Date.now()}`;
+        hosts.set(hostId, { ws, userId, username, deviceName });
+        ws._hostId = hostId;
+        sendJSON(ws, { type: "host-ready", hostId, deviceName });
+        console.log(`Host registered: ${username} (${deviceName}) -> ${hostId}`);
+        break;
+      }
+
+      case "list-hosts": {
+        const userHosts = [];
+        for (const [hid, h] of hosts) {
+          if (h.userId === userId) {
+            userHosts.push({ hostId: hid, deviceName: h.deviceName });
+          }
+        }
+        sendJSON(ws, { type: "host-list", hosts: userHosts });
         break;
       }
 
       case "connect": {
         role = "client";
-        code = msg.code?.toUpperCase();
-        const hostWs = hosts.get(code);
-        if (!hostWs) {
-          sendJSON(ws, { type: "error", message: "接続コードが見つかりません" });
+        const targetHostId = msg.hostId;
+        const hostEntry = hosts.get(targetHostId);
+        if (!hostEntry || hostEntry.userId !== userId) {
+          sendJSON(ws, { type: "error", message: "ホストが見つかりません" });
           return;
         }
-        clients.set(code, ws);
-        ws._code = code;
+        hostId = targetHostId;
+        clients.set(hostId, ws);
+        ws._hostId = hostId;
         sendJSON(ws, { type: "connected" });
-        sendJSON(hostWs, { type: "client-connected" });
-        console.log(`Client connected to host: ${code}`);
+        sendJSON(hostEntry.ws, { type: "client-connected" });
+        console.log(`Client connected to host: ${hostId}`);
         break;
       }
 
       case "frame": {
         if (role !== "host") return;
-        const clientWs = clients.get(code);
+        const clientWs = clients.get(hostId);
         if (clientWs) {
           clientWs.send(raw.toString());
         }
@@ -72,16 +208,16 @@ wss.on("connection", (ws) => {
 
       case "input": {
         if (role !== "client") return;
-        const hostWs = hosts.get(code);
-        if (hostWs) {
-          hostWs.send(raw.toString());
+        const hostEntry = hosts.get(hostId);
+        if (hostEntry) {
+          hostEntry.ws.send(raw.toString());
         }
         break;
       }
 
       case "screen-info": {
         if (role !== "host") return;
-        const clientWs = clients.get(code);
+        const clientWs = clients.get(hostId);
         if (clientWs) {
           clientWs.send(raw.toString());
         }
@@ -94,23 +230,25 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("close", () => {
-    if (role === "host" && code) {
-      hosts.delete(code);
-      const clientWs = clients.get(code);
+    if (role === "host" && hostId) {
+      hosts.delete(hostId);
+      const clientWs = clients.get(hostId);
       if (clientWs) {
         sendJSON(clientWs, { type: "disconnected", message: "ホストが切断しました" });
-        clients.delete(code);
+        clients.delete(hostId);
       }
-      console.log(`Host disconnected: ${code}`);
-    } else if (role === "client" && code) {
-      clients.delete(code);
-      const hostWs = hosts.get(code);
-      if (hostWs) {
-        sendJSON(hostWs, { type: "disconnected", message: "クライアントが切断しました" });
+      console.log(`Host disconnected: ${hostId}`);
+    } else if (role === "client" && hostId) {
+      clients.delete(hostId);
+      const hostEntry = hosts.get(hostId);
+      if (hostEntry) {
+        sendJSON(hostEntry.ws, { type: "disconnected", message: "クライアントが切断しました" });
       }
-      console.log(`Client disconnected from: ${code}`);
+      console.log(`Client disconnected from: ${hostId}`);
     }
   });
 });
 
-console.log(`Signaling server running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Signaling server running on port ${PORT}`);
+});

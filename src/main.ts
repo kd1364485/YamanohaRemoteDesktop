@@ -198,7 +198,7 @@ document.getElementById("cancel-host-btn")?.addEventListener("click", async () =
 document.getElementById("connect-btn")?.addEventListener("click", () => {
   if (!authToken) { showView("login-view"); return; }
   showView("connect-view");
-  fetchHostList();
+  fetchHostList();//ホスト一覧
 });
 
 document.getElementById("refresh-hosts-btn")?.addEventListener("click", () => {
@@ -217,8 +217,10 @@ function fetchHostList(): void {
 
   listWs = new WebSocket(serverUrl);
 
+
+  //2段階メッセージフロー[1] auth送信 → [2] auth-ok受信 → [3] list-hosts送信 → [4] host-list受信 → close
   listWs.onopen = () => {
-    listWs?.send(JSON.stringify({ type: "auth", token: authToken }));
+    listWs?.send(JSON.stringify({ type: "auth", token: authToken }));//ステップ1
   };
 
   listWs.onmessage = (event) => {
@@ -226,12 +228,12 @@ function fetchHostList(): void {
     try { msg = JSON.parse(event.data); } catch { return; }
 
     if (msg.type === "auth-ok") {
-      listWs?.send(JSON.stringify({ type: "list-hosts" }));
+      listWs?.send(JSON.stringify({ type: "list-hosts" }));//ステップ3
       return;
     }
 
     if (msg.type === "host-list") {
-      renderHostList(msg.hosts as HostInfo[]);
+      renderHostList(msg.hosts as HostInfo[]);//ステップ4
       listWs?.close();
       listWs = null;
       return;
@@ -292,8 +294,10 @@ function connectToHost(hostId: string): void {
 
   clientWs = new WebSocket(serverUrl);
 
+  //3段階メッセージフロー
+  //[1] auth送信 → [2] auth-ok受信 → [3] connect送信 → [4] connected受信 → 画面共有開始
   clientWs.onopen = () => {
-    clientWs?.send(JSON.stringify({ type: "auth", token: authToken }));
+    clientWs?.send(JSON.stringify({ type: "auth", token: authToken }));//ステップ1
   };
 
   clientWs.onmessage = (event) => {
@@ -306,22 +310,22 @@ function connectToHost(hostId: string): void {
 
     // 認証成功後、接続要求を送信
     if (msg.type === "auth-ok") {
-      clientWs?.send(JSON.stringify({ type: "connect", hostId }));
+      clientWs?.send(JSON.stringify({ type: "connect", hostId }));//ステップ3
       return;
     }
 
     switch (msg.type) {
-      case "connected":
+      case "connected"://ステップ4
         showView("remote-view");
         setConnectionStatus("接続済み", "green");
-        setupRemoteCanvas();
+        setupRemoteCanvas();//canvasの初期化 + 入力イベント登録
         break;
 
-      case "frame":
+      case "frame"://5画面受信(継続)
         drawFrame(msg.data);
         break;
 
-      case "disconnected":
+      case "disconnected"://切断通知
         setConnectionStatus("切断されました", "red");
         showView("home-view");
         if (clientWs) {
@@ -330,7 +334,7 @@ function connectToHost(hostId: string): void {
         }
         break;
 
-      case "error":
+      case "error"://エラー
         setConnectionStatus("エラー: " + msg.message, "red");
         showView("home-view");
         if (clientWs) {

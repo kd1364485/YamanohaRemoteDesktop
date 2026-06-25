@@ -273,9 +273,9 @@ async function handleInput(msg) {
         break;
       }
 
-      case "key":
+      case "key": {
         const key = mapKey(msg.key);
-        if (key) {
+        if (key !== null) {
           if (msg.isDown) {
             await keyboard.pressKey(key);
           } else {
@@ -283,13 +283,15 @@ async function handleInput(msg) {
           }
         }
         break;
+      }
 
-      case "key-type":
-        const typeKey = mapKey(msg.key);
-        if (typeKey) {
-          await keyboard.type(typeKey);
+      case "type-char": {
+        // 印字可能な文字（記号・大文字含む）をそのまま入力
+        if (typeof msg.char === "string" && msg.char.length > 0) {
+          await keyboard.type(msg.char);
         }
         break;
+      }
     }
   } catch (err) {
     console.error("Input error:", err.message);
@@ -297,25 +299,32 @@ async function handleInput(msg) {
 }
 
 function mapKey(key) {
+  if (typeof key !== "string") return null;
+
+  // 1文字の英字は大文字・小文字どちらも同じ物理キーへ（Ctrl+C など併用時用）
+  if (key.length === 1) {
+    const lower = key.toLowerCase();
+    if (lower >= "a" && lower <= "z") return Key[lower.toUpperCase()];
+    const digit = { "0": Key.Num0, "1": Key.Num1, "2": Key.Num2, "3": Key.Num3,
+      "4": Key.Num4, "5": Key.Num5, "6": Key.Num6, "7": Key.Num7,
+      "8": Key.Num8, "9": Key.Num9, " ": Key.Space };
+    if (digit[key] !== undefined) return digit[key];
+  }
+
   const keyMap = {
-    "a": Key.A, "b": Key.B, "c": Key.C, "d": Key.D, "e": Key.E,
-    "f": Key.F, "g": Key.G, "h": Key.H, "i": Key.I, "j": Key.J,
-    "k": Key.K, "l": Key.L, "m": Key.M, "n": Key.N, "o": Key.O,
-    "p": Key.P, "q": Key.Q, "r": Key.R, "s": Key.S, "t": Key.T,
-    "u": Key.U, "v": Key.V, "w": Key.W, "x": Key.X, "y": Key.Y,
-    "z": Key.Z,
-    "0": Key.Num0, "1": Key.Num1, "2": Key.Num2, "3": Key.Num3,
-    "4": Key.Num4, "5": Key.Num5, "6": Key.Num6, "7": Key.Num7,
-    "8": Key.Num8, "9": Key.Num9,
     "Enter": Key.Enter, "Escape": Key.Escape, "Backspace": Key.Backspace,
-    "Tab": Key.Tab, "Space": Key.Space,
+    "Tab": Key.Tab, "Space": Key.Space, "CapsLock": Key.CapsLock,
     "Shift": Key.LeftShift, "Control": Key.LeftControl,
-    "Alt": Key.LeftAlt, "Meta": Key.LeftSuper,
+    "Alt": Key.LeftAlt, "Meta": Key.LeftSuper, "OS": Key.LeftSuper,
     "ArrowUp": Key.Up, "ArrowDown": Key.Down,
     "ArrowLeft": Key.Left, "ArrowRight": Key.Right,
     "Delete": Key.Delete, "Home": Key.Home, "End": Key.End,
+    "PageUp": Key.PageUp, "PageDown": Key.PageDown, "Insert": Key.Insert,
+    "F1": Key.F1, "F2": Key.F2, "F3": Key.F3, "F4": Key.F4,
+    "F5": Key.F5, "F6": Key.F6, "F7": Key.F7, "F8": Key.F8,
+    "F9": Key.F9, "F10": Key.F10, "F11": Key.F11, "F12": Key.F12,
   };
-  return keyMap[key] || null;
+  return keyMap[key] !== undefined ? keyMap[key] : null;
 }
 
 connect();

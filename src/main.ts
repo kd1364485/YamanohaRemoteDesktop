@@ -377,6 +377,8 @@ function connectToHost(hostId: string): void {
   };
 
   clientWs.onclose = () => {
+    // キーボード捕捉を解除（押しっぱなしキーも解放）
+    detachRemoteKeyboard();
     if (!document.getElementById("remote-view")?.classList.contains("hidden")) {
       showView("home-view");
       setConnectionStatus("未接続", "gray");
@@ -476,23 +478,82 @@ function setupRemoteCanvas(): void {
       e.preventDefault();
     };
 
-    canvas.onkeydown = (e) => {
-      if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-      clientWs.send(JSON.stringify({ type: "input", action: "key", key: e.key, isDown: true }));
-      if (["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace"].includes(e.key)) {
-        e.preventDefault();
-      }
-    };
-
-    canvas.onkeyup = (e) => {
-      if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-      clientWs.send(JSON.stringify({ type: "input", action: "key", key: e.key, isDown: false }));
-    };
-
     canvas.tabIndex = 0;
+    // 物理キーボードのイベントを受け取れるようフォーカスを当てる
+    canvas.focus();
+    // キーイベントは window 全体で捕捉（canvasのフォーカスに依存せず確実に拾う）
+    attachRemoteKeyboard();
 
     setupTouchControls(canvas);
   }
+}
+
+// --- リモート向けキーボード入力（window全体で捕捉） ---
+
+// 修飾キー（単体では文字を生成しないキー）。"OS" はWindowsキーの別名（一部ブラウザ）。
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "OS"]);
+// keydownで「キー押下」として送ったキーを記録し、keyupで確実に離す
+const heldKeys = new Set<string>();
+let keyboardAttached = false;
+
+function sendKeyInput(obj: object): void {
+  if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+    clientWs.send(JSON.stringify(obj));
+  }
+}
+
+function handleRemoteKeyDown(e: KeyboardEvent): void {
+  const k = e.key;
+  // Ctrl/Alt/Meta併用（ショートカット）かどうか
+  const combo = e.ctrlKey || e.altKey || e.metaKey;
+
+  if (MODIFIER_KEYS.has(k)) {
+    // 修飾キーそのもの（Shift/Ctrl/Alt/Windows等）→ 押下を送る
+    heldKeys.add(k);
+    sendKeyInput({ type: "input", action: "key", key: k, isDown: true });
+  } else if (combo) {
+    // Ctrl+C などのショートカット → キー押下として送る（keyupで離す）
+    heldKeys.add(k);
+    sendKeyInput({ type: "input", action: "key", key: k, isDown: true });
+  } else if (k.length === 1) {
+    // 印字可能な1文字（記号・大文字・数字含む）→ そのまま文字入力
+    sendKeyInput({ type: "input", action: "type-char", char: k });
+  } else {
+    // Enter / Backspace / Delete / 矢印 などの特殊キー → キー押下として送る
+    heldKeys.add(k);
+    sendKeyInput({ type: "input", action: "key", key: k, isDown: true });
+  }
+  // ブラウザ既定動作（スクロール・タブ移動・戻る等）を抑止
+  e.preventDefault();
+}
+
+function handleRemoteKeyUp(e: KeyboardEvent): void {
+  const k = e.key;
+  // keydownで押下として送ったキーのみ離す（type-charは離さない）
+  if (heldKeys.has(k)) {
+    heldKeys.delete(k);
+    sendKeyInput({ type: "input", action: "key", key: k, isDown: false });
+    e.preventDefault();
+  }
+}
+
+function attachRemoteKeyboard(): void {
+  if (keyboardAttached) return;
+  keyboardAttached = true;
+  window.addEventListener("keydown", handleRemoteKeyDown, true);
+  window.addEventListener("keyup", handleRemoteKeyUp, true);
+}
+
+function detachRemoteKeyboard(): void {
+  if (!keyboardAttached) return;
+  keyboardAttached = false;
+  window.removeEventListener("keydown", handleRemoteKeyDown, true);
+  window.removeEventListener("keyup", handleRemoteKeyUp, true);
+  // 押しっぱなしのキーがあれば解放（キーの押しっぱなし防止）
+  for (const k of heldKeys) {
+    sendKeyInput({ type: "input", action: "key", key: k, isDown: false });
+  }
+  heldKeys.clear();
 }
 
 // --- スマホ向けタッチ操作（トラックパッドモード） ---
@@ -529,6 +590,8 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
 
   canvas.addEventListener("touchstart", (e) => {
     e.preventDefault();
+    // タップで再フォーカス（物理キーボード入力を拾えるように）
+    canvas.focus();
     touchCount = e.touches.length;
     const t = e.touches[0];
     lastX = t.clientX;

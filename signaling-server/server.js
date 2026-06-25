@@ -66,6 +66,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ヘルスチェック（fly.io の死活監視・動作確認用）
+  if (req.url === "/" || req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+
   // ユーザー登録
   if (req.url === "/api/register" && req.method === "POST") {
     const body = await parseBody(req);
@@ -220,6 +227,26 @@ wss.on("connection", (ws) => {
         const clientWs = clients.get(hostId);
         if (clientWs) {
           clientWs.send(raw.toString());
+        }
+        break;
+      }
+
+      case "display-list": {
+        // ホスト → クライアント: 利用可能なディスプレイ一覧
+        if (role !== "host") return;
+        const clientWs = clients.get(hostId);
+        if (clientWs) {
+          clientWs.send(raw.toString());
+        }
+        break;
+      }
+
+      case "select-display": {
+        // クライアント → ホスト: 表示するディスプレイの切替え要求
+        if (role !== "client") return;
+        const hostEntry = hosts.get(hostId);
+        if (hostEntry) {
+          hostEntry.ws.send(raw.toString());
         }
         break;
       }

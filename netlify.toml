@@ -1,0 +1,10 @@
+# Netlify 設定（Vite フロントエンドのホスティング）
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# SPA ではないが、念のため不明なパスは index.html にフォールバック
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

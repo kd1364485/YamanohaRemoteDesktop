@@ -17,6 +17,60 @@ keyboard.config.autoDelayMs = 0;
 
 let ws;
 let isStreaming = false;
+let displays = [];          // 利用可能なディスプレイ一覧
+let currentDisplay = null;  // 現在キャプチャ中のディスプレイ
+
+// ディスプレイ一覧を取得し、現在のディスプレイを決定する
+async function loadDisplays() {
+  try {
+    const list = await screenshot.listDisplays();
+    // screenshot-desktop は物理ピクセル、nut-js は論理ピクセル(DPIスケール適用後)を使う。
+    // マウス制御・カーソル位置は nut-js 座標系に揃えるため、論理座標(l*)を保持する。
+    displays = list.map((d, i) => {
+      const scale = d.dpiScale || 1;
+      return {
+        id: d.id,
+        label: `ディスプレイ${i + 1} (${d.width}×${d.height})`,
+        width: d.width,   // 物理ピクセル（ラベル表示用）
+        height: d.height,
+        // nut-js 向けの論理座標バウンド
+        lLeft: d.left / scale,
+        lTop: d.top / scale,
+        lWidth: d.width / scale,
+        lHeight: d.height / scale,
+        primary: d.left === 0 && d.top === 0,
+      };
+    });
+    // 未選択 or 選択中の画面がなくなった場合はプライマリ（なければ先頭）を選択
+    if (!currentDisplay || !displays.find((d) => d.id === currentDisplay.id)) {
+      currentDisplay = displays.find((d) => d.primary) || displays[0] || null;
+    }
+  } catch (err) {
+    console.error("Display list error:", err.message);
+    displays = [];
+    currentDisplay = null;
+  }
+}
+
+// クライアントへディスプレイ一覧を送信
+function sendDisplayList() {
+  if (!ws || ws.readyState !== ws.OPEN) return;
+  ws.send(JSON.stringify({
+    type: "display-list",
+    displays: displays.map(({ id, label, width, height, primary }) => ({ id, label, width, height, primary })),
+    currentId: currentDisplay?.id || null,
+  }));
+}
+
+// 正規化座標(0..1)を選択ディスプレイ上のグローバル座標に変換
+function toGlobalPosition(nx, ny) {
+  if (typeof nx !== "number" || typeof ny !== "number" || !currentDisplay) return null;
+  // nut-js は論理座標を使うので論理バウンドで換算
+  return {
+    x: Math.round(currentDisplay.lLeft + nx * currentDisplay.lWidth),
+    y: Math.round(currentDisplay.lTop + ny * currentDisplay.lHeight),
+  };
+}
 
 function connect() {
   ws = new WebSocket(SERVER_URL);
@@ -46,8 +100,26 @@ function connect() {
 
       case "client-connected":
         console.log("Client connected, starting stream...");
+        await loadDisplays();
+        sendDisplayList();
         startStreaming();
         break;
+
+      case "select-display": {
+        const target = displays.find((d) => d.id === msg.displayId);
+        if (target) {
+          currentDisplay = target;
+          console.log(`Display switched to: ${target.label}`);
+          // 選択したディスプレイ中央へカーソルを移動（相対操作の起点を合わせる）
+          try {
+            await mouse.setPosition({
+              x: Math.round(target.lLeft + target.lWidth / 2),
+              y: Math.round(target.lTop + target.lHeight / 2),
+            });
+          } catch {}
+        }
+        break;
+      }
 
       case "input":
         await handleInput(msg);
@@ -97,13 +169,31 @@ async function startStreaming() {
 
     try {
       // PNG形式で取得し、sharpで縮小+JPEG圧縮（データ量を大幅削減）
-      const raw = await screenshot({ format: "png" });
+      // currentDisplay が指定されていればそのディスプレイのみキャプチャ
+      const captureOpts = { format: "png" };
+      if (currentDisplay) captureOpts.screen = currentDisplay.id;
+      const raw = await screenshot(captureOpts);
       const jpeg = await sharp(raw)
         .resize({ width: TARGET_WIDTH, withoutEnlargement: true })
         .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
         .toBuffer();
 
-      ws.send(JSON.stringify({ type: "frame", data: jpeg.toString("base64") }));
+      // カーソル位置を取得し、選択ディスプレイ基準の正規化座標(0..1)に変換。
+      // 特定ディスプレイ指定キャプチャではOSがカーソルを描画しないため、
+      // クライアント側で重ねて描画できるよう位置を一緒に送る。
+      let cursor = null;
+      try {
+        const pos = await mouse.getPosition();
+        if (currentDisplay) {
+          // pos は論理座標なので論理バウンドで正規化
+          const cx = (pos.x - currentDisplay.lLeft) / currentDisplay.lWidth;
+          const cy = (pos.y - currentDisplay.lTop) / currentDisplay.lHeight;
+          // 選択ディスプレイの範囲内にカーソルがある場合のみ送信
+          if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) cursor = { x: cx, y: cy };
+        }
+      } catch {}
+
+      ws.send(JSON.stringify({ type: "frame", data: jpeg.toString("base64"), cursor }));
     } catch (err) {
       console.error("Capture error:", err.message);
     }
@@ -127,9 +217,11 @@ function sleep(ms) {
 async function handleInput(msg) {
   try {
     switch (msg.action) {
-      case "mouse-move":
-        await mouse.setPosition({ x: msg.x, y: msg.y });
+      case "mouse-move": {
+        const p = toGlobalPosition(msg.nx, msg.ny);
+        if (p) await mouse.setPosition(p);
         break;
+      }
 
       case "mouse-move-rel": {
         // 現在位置からの相対移動（スマホのトラックパッド操作用）
@@ -138,29 +230,32 @@ async function handleInput(msg) {
         break;
       }
 
-      case "mouse-click":
-        // 座標が指定されていれば移動してからクリック、なければ現在位置でクリック
-        if (typeof msg.x === "number" && typeof msg.y === "number") {
-          await mouse.setPosition({ x: msg.x, y: msg.y });
-        }
+      case "mouse-click": {
+        // 正規化座標が指定されていれば移動してからクリック、なければ現在位置でクリック
+        const p = toGlobalPosition(msg.nx, msg.ny);
+        if (p) await mouse.setPosition(p);
         if (msg.button === "right") {
           await mouse.click(Button.RIGHT);
         } else {
           await mouse.click(Button.LEFT);
         }
         break;
+      }
 
-      case "mouse-double-click":
-        if (typeof msg.x === "number" && typeof msg.y === "number") {
-          await mouse.setPosition({ x: msg.x, y: msg.y });
-        }
+      case "mouse-double-click": {
+        const p = toGlobalPosition(msg.nx, msg.ny);
+        if (p) await mouse.setPosition(p);
         await mouse.doubleClick(msg.button === "right" ? Button.RIGHT : Button.LEFT);
         break;
+      }
 
-      case "mouse-down":
+      case "mouse-down": {
+        const p = toGlobalPosition(msg.nx, msg.ny);
+        if (p) await mouse.setPosition(p);
         if (msg.button === "left") await mouse.pressButton(Button.LEFT);
         else if (msg.button === "right") await mouse.pressButton(Button.RIGHT);
         break;
+      }
 
       case "mouse-up":
         if (msg.button === "left") await mouse.releaseButton(Button.LEFT);

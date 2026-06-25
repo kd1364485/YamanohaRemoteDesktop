@@ -8,9 +8,23 @@ let authToken: string | null = localStorage.getItem("authToken");
 let authUsername: string | null = localStorage.getItem("authUsername");
 let listWs: WebSocket | null = null;
 
-// アクセス中のホスト名からサーバーURLを自動生成
-// 例: スマホが http://10.17.41.5:1420 でアクセス → ws://10.17.41.5:8080
+type DisplayInfo = { id: string; label: string; width: number; height: number; primary: boolean };
+let remoteDisplays: DisplayInfo[] = [];
+let currentDisplayId: string | null = null;
+
+// クラウド（fly.io）にデプロイしたシグナリングサーバーのホスト名。
+// `fly launch` で割り当てられた実際のアプリ名に合わせて変更してください。
+// 例: アプリ名が "yamanoha-signaling" なら "yamanoha-signaling.fly.dev"
+// 空文字 "" にするとローカル（同じWi-Fi）モードに戻ります。
+const CLOUD_HOST = "yamanoha-signaling.fly.dev";
+
+// サーバーURLを生成（WebSocket用）
+// CLOUD_HOST が設定されていればクラウド（wss://...）を使い、
+// 空ならアクセス中のホスト名からローカルURL（ws://10.17.41.5:8080）を生成
 function buildDefaultServerUrl(): string {
+  if (CLOUD_HOST) {
+    return `wss://${CLOUD_HOST}`;
+  }
   const hostname = window.location.hostname || "localhost";
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return `${protocol}://${hostname}:8080`;
@@ -39,6 +53,9 @@ window.addEventListener("DOMContentLoaded", () => {
 // --- 認証機能 ---
 
 function getHttpBaseUrl(): string {
+  if (CLOUD_HOST) {
+    return `https://${CLOUD_HOST}`;
+  }
   const hostname = window.location.hostname || "localhost";
   const protocol = window.location.protocol === "https:" ? "https" : "http";
   return `${protocol}://${hostname}:8080`;
@@ -290,6 +307,10 @@ function connectToHost(hostId: string): void {
   if (!authToken) { showView("login-view"); return; }
   const serverUrl = getServerUrl();
 
+  // 前回接続のディスプレイ情報をリセット
+  remoteDisplays = [];
+  currentDisplayId = null;
+
   setConnectionStatus("接続中...", "yellow");
 
   clientWs = new WebSocket(serverUrl);
@@ -321,8 +342,14 @@ function connectToHost(hostId: string): void {
         setupRemoteCanvas();//canvasの初期化 + 入力イベント登録
         break;
 
+      case "display-list"://ホストのディスプレイ一覧を受信
+        remoteDisplays = (msg.displays as DisplayInfo[]) || [];
+        currentDisplayId = msg.currentId || null;
+        renderDisplaySwitcher();
+        break;
+
       case "frame"://5画面受信(継続)
-        drawFrame(msg.data);
+        drawFrame(msg.data, msg.cursor);
         break;
 
       case "disconnected"://切断通知
@@ -370,6 +397,42 @@ document.getElementById("disconnect-btn")?.addEventListener("click", () => {
   setConnectionStatus("未接続", "gray");
 });
 
+// --- ディスプレイ切替え ---
+
+// ホストのディスプレイ一覧をボタンとして表示（複数ある場合のみ）
+function renderDisplaySwitcher(): void {
+  const bar = document.getElementById("display-switcher");
+  if (!bar) return;
+  bar.innerHTML = "";
+
+  // ディスプレイが1つ以下なら切替え不要なので非表示
+  if (remoteDisplays.length <= 1) {
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.remove("hidden");
+
+  for (const d of remoteDisplays) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const active = d.id === currentDisplayId;
+    btn.className = `px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+      active ? "bg-cyan-500 text-white" : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+    }`;
+    btn.textContent = d.label;
+    btn.addEventListener("click", () => selectDisplay(d.id));
+    bar.appendChild(btn);
+  }
+}
+
+// 表示するディスプレイを切り替える
+function selectDisplay(displayId: string): void {
+  if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
+  currentDisplayId = displayId;
+  clientWs.send(JSON.stringify({ type: "select-display", displayId }));
+  renderDisplaySwitcher();
+}
+
 // --- Remote canvas & input handling ---
 
 function setupRemoteCanvas(): void {
@@ -384,18 +447,19 @@ function setupRemoteCanvas(): void {
     canvas.onmousemove = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
       const rect = canvas.getBoundingClientRect();
-      const x = Math.round((e.clientX - rect.left) / rect.width * canvas.width);
-      const y = Math.round((e.clientY - rect.top) / rect.height * canvas.height);
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-move", x, y }));
+      // 0..1 の正規化座標で送信（ホスト側で選択ディスプレイの実解像度・位置に変換）
+      const nx = (e.clientX - rect.left) / rect.width;
+      const ny = (e.clientY - rect.top) / rect.height;
+      clientWs.send(JSON.stringify({ type: "input", action: "mouse-move", nx, ny }));
     };
 
     canvas.onmousedown = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
       const rect = canvas.getBoundingClientRect();
-      const x = Math.round((e.clientX - rect.left) / rect.width * canvas.width);
-      const y = Math.round((e.clientY - rect.top) / rect.height * canvas.height);
+      const nx = (e.clientX - rect.left) / rect.width;
+      const ny = (e.clientY - rect.top) / rect.height;
       const button = e.button === 2 ? "right" : "left";
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-down", button, x, y }));
+      clientWs.send(JSON.stringify({ type: "input", action: "mouse-down", button, nx, ny }));
     };
 
     canvas.onmouseup = (e) => {
@@ -555,7 +619,7 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
   }, { passive: false });
 }
 
-function drawFrame(base64Data: string): void {
+function drawFrame(base64Data: string, cursor?: { x: number; y: number } | null): void {
   const canvas = document.getElementById("remote-canvas") as HTMLCanvasElement | null;
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -568,6 +632,35 @@ function drawFrame(base64Data: string): void {
       canvas.height = img.height;
     }
     ctx.drawImage(img, 0, 0);
+    // ホストから受け取ったカーソル位置に矢印を重ねて描画
+    if (cursor) {
+      drawCursor(ctx, cursor.x * canvas.width, cursor.y * canvas.height, canvas.width);
+    }
   };
   img.src = `data:image/jpeg;base64,${base64Data}`;
+}
+
+// canvas上に矢印カーソルを描画（白塗り+黒縁で視認性を確保）
+function drawCursor(ctx: CanvasRenderingContext2D, x: number, y: number, canvasWidth: number): void {
+  // canvas幅に応じてサイズを調整（縮小表示でも見えるよう大きめ）
+  const s = Math.max(18, canvasWidth / 45);
+  // 標準的な矢印カーソルの形状（先端が原点）
+  const pts: [number, number][] = [
+    [0, 0], [0, 1], [0.28, 0.75], [0.45, 1.15],
+    [0.6, 1.08], [0.42, 0.68], [0.7, 0.68],
+  ];
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x + pts[0][0] * s, y + pts[0][1] * s);
+  for (let i = 1; i < pts.length; i++) {
+    ctx.lineTo(x + pts[i][0] * s, y + pts[i][1] * s);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#000000";
+  ctx.lineWidth = Math.max(1.5, s / 12);
+  ctx.lineJoin = "round";
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
 }

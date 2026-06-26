@@ -135,6 +135,10 @@ wss.on("connection", (ws) => {
   let deviceName = null;
   let authenticated = false;
 
+  // heartbeat: pongを受け取ったら生存とみなす
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
+
   ws.on("message", (raw) => {
     let msg;
     try {
@@ -168,8 +172,21 @@ wss.on("connection", (ws) => {
       case "host": {
         role = "host";
         deviceName = msg.deviceName || "PC";
+        const instanceId = msg.instanceId || null;
+        // 同一プロセス(instanceId一致)の古い登録だけを掃除する。
+        // デバイス名で一括削除すると、再接続のたびに別IDで登録される自分自身や
+        // 別プロセスを閉じ合い、切断ループになるため instanceId で限定する。
+        if (instanceId) {
+          for (const [hid, h] of hosts) {
+            if (h.userId === userId && h.instanceId === instanceId) {
+              hosts.delete(hid);
+              try { h.ws.close(); } catch {}
+              console.log(`Removed stale host: ${hid}`);
+            }
+          }
+        }
         hostId = `host-${userId}-${Date.now()}`;
-        hosts.set(hostId, { ws, userId, username, deviceName });
+        hosts.set(hostId, { ws, userId, username, deviceName, instanceId });
         ws._hostId = hostId;
         sendJSON(ws, { type: "host-ready", hostId, deviceName });
         console.log(`Host registered: ${username} (${deviceName}) -> ${hostId}`);
@@ -275,6 +292,19 @@ wss.on("connection", (ws) => {
     }
   });
 });
+
+// heartbeat: 30秒ごとに死活確認し、応答のない接続を切断（ゴースト登録の除去）
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate(); // close イベントが発火し、hosts/clients から除去される
+      continue;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
+}, 30000);
+wss.on("close", () => clearInterval(heartbeatInterval));
 
 server.listen(PORT, () => {
   console.log(`Signaling server running on port ${PORT}`);

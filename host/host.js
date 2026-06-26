@@ -6,6 +6,8 @@ import { mouse, keyboard, Button, Key } from "@nut-tree-fork/nut-js";
 const SERVER_URL = process.env.SIGNALING_URL || "ws://localhost:8080";
 const AUTH_TOKEN = process.env.SIGNALING_TOKEN || null;
 const DEVICE_NAME = process.env.SIGNALING_DEVICE_NAME || "PC";
+// プロセス起動時に一度だけ生成する固定ID。再接続時の重複登録を一意に識別するために使う。
+const INSTANCE_ID = `inst-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 // --- 画質・パフォーマンス設定（ラグ対策） ---
 const TARGET_WIDTH = Number(process.env.STREAM_WIDTH) || 1280; // 送信画像の横幅（縮小）
@@ -19,6 +21,7 @@ let ws;
 let isStreaming = false;
 let displays = [];          // 利用可能なディスプレイ一覧
 let currentDisplay = null;  // 現在キャプチャ中のディスプレイ
+let trackedCursor = null;    // カーソル位置（論理座標）を自前で追跡。nut-jsのgetPosition()がセカンダリディスプレイで不正確なため。
 
 // ディスプレイ一覧を取得し、現在のディスプレイを決定する
 async function loadDisplays() {
@@ -26,6 +29,10 @@ async function loadDisplays() {
     const list = await screenshot.listDisplays();
     // screenshot-desktop は物理ピクセル、nut-js は論理ピクセル(DPIスケール適用後)を使う。
     // マウス制御・カーソル位置は nut-js 座標系に揃えるため、論理座標(l*)を保持する。
+    // プライマリディスプレイのDPIスケールを取得（仮想画面オフセットの変換に使う）
+    const primary = list.find((d) => d.left === 0 && d.top === 0) || list[0];
+    const primaryScale = (primary && primary.dpiScale) || 1;
+
     displays = list.map((d, i) => {
       const scale = d.dpiScale || 1;
       return {
@@ -33,9 +40,10 @@ async function loadDisplays() {
         label: `ディスプレイ${i + 1} (${d.width}×${d.height})`,
         width: d.width,   // 物理ピクセル（ラベル表示用）
         height: d.height,
-        // nut-js 向けの論理座標バウンド
-        lLeft: d.left / scale,
-        lTop: d.top / scale,
+        // left/top は仮想画面上の物理ピクセル座標 → プライマリのスケールで論理化
+        // width/height は各ディスプレイ自身のスケールで論理化
+        lLeft: d.left / primaryScale,
+        lTop: d.top / primaryScale,
         lWidth: d.width / scale,
         lHeight: d.height / scale,
         primary: d.left === 0 && d.top === 0,
@@ -91,7 +99,7 @@ function connect() {
     switch (msg.type) {
       case "auth-ok":
         console.log(`Authenticated as ${msg.username}`);
-        ws.send(JSON.stringify({ type: "host", deviceName: DEVICE_NAME }));
+        ws.send(JSON.stringify({ type: "host", deviceName: DEVICE_NAME, instanceId: INSTANCE_ID }));
         break;
 
       case "host-ready":
@@ -110,12 +118,15 @@ function connect() {
         if (target) {
           currentDisplay = target;
           console.log(`Display switched to: ${target.label}`);
-          // 選択したディスプレイ中央へカーソルを移動（相対操作の起点を合わせる）
+          // カーソルを選択ディスプレイの中央へ移動し、追跡位置も更新
+          const cx = Math.round(target.lLeft + target.lWidth / 2);
+          const cy = Math.round(target.lTop + target.lHeight / 2);
+          trackedCursor = { x: cx, y: cy };
           try {
-            await mouse.setPosition({
-              x: Math.round(target.lLeft + target.lWidth / 2),
-              y: Math.round(target.lTop + target.lHeight / 2),
-            });
+            await mouse.setPosition(trackedCursor);
+            // setPosition した座標と実際の位置が異なる場合があるため、
+            // getPosition() で実際の位置を取り直して描画位置を同期させる
+            trackedCursor = await mouse.getPosition();
           } catch {}
         }
         break;
@@ -181,17 +192,13 @@ async function startStreaming() {
       // カーソル位置を取得し、選択ディスプレイ基準の正規化座標(0..1)に変換。
       // 特定ディスプレイ指定キャプチャではOSがカーソルを描画しないため、
       // クライアント側で重ねて描画できるよう位置を一緒に送る。
+      // getPosition()がセカンダリディスプレイで不正確なため trackedCursor を優先。
       let cursor = null;
-      try {
-        const pos = await mouse.getPosition();
-        if (currentDisplay) {
-          // pos は論理座標なので論理バウンドで正規化
-          const cx = (pos.x - currentDisplay.lLeft) / currentDisplay.lWidth;
-          const cy = (pos.y - currentDisplay.lTop) / currentDisplay.lHeight;
-          // 選択ディスプレイの範囲内にカーソルがある場合のみ送信
-          if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) cursor = { x: cx, y: cy };
-        }
-      } catch {}
+      if (currentDisplay && trackedCursor) {
+        const cx = (trackedCursor.x - currentDisplay.lLeft) / currentDisplay.lWidth;
+        const cy = (trackedCursor.y - currentDisplay.lTop) / currentDisplay.lHeight;
+        if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) cursor = { x: cx, y: cy };
+      }
 
       ws.send(JSON.stringify({ type: "frame", data: jpeg.toString("base64"), cursor }));
     } catch (err) {
@@ -219,21 +226,38 @@ async function handleInput(msg) {
     switch (msg.action) {
       case "mouse-move": {
         const p = toGlobalPosition(msg.nx, msg.ny);
-        if (p) await mouse.setPosition(p);
+        if (p) {
+          await mouse.setPosition(p);
+          try { trackedCursor = await mouse.getPosition(); } catch {}
+        }
         break;
       }
 
       case "mouse-move-rel": {
         // 現在位置からの相対移動（スマホのトラックパッド操作用）
-        const pos = await mouse.getPosition();
-        await mouse.setPosition({ x: pos.x + msg.dx, y: pos.y + msg.dy });
+        // getPosition()がセカンダリディスプレイで不正確なため、自前追跡値を使う
+        if (!trackedCursor) {
+          try { trackedCursor = await mouse.getPosition(); } catch { break; }
+        }
+        let nx = trackedCursor.x + msg.dx;
+        let ny = trackedCursor.y + msg.dy;
+        // カーソルが現在のディスプレイ範囲外に出ないようクランプ
+        if (currentDisplay) {
+          nx = Math.max(currentDisplay.lLeft, Math.min(nx, currentDisplay.lLeft + currentDisplay.lWidth - 1));
+          ny = Math.max(currentDisplay.lTop, Math.min(ny, currentDisplay.lTop + currentDisplay.lHeight - 1));
+        }
+        trackedCursor = { x: nx, y: ny };
+        await mouse.setPosition(trackedCursor);
         break;
       }
 
       case "mouse-click": {
         // 正規化座標が指定されていれば移動してからクリック、なければ現在位置でクリック
         const p = toGlobalPosition(msg.nx, msg.ny);
-        if (p) await mouse.setPosition(p);
+        if (p) {
+          await mouse.setPosition(p);
+          try { trackedCursor = await mouse.getPosition(); } catch {}
+        }
         if (msg.button === "right") {
           await mouse.click(Button.RIGHT);
         } else {
@@ -244,14 +268,20 @@ async function handleInput(msg) {
 
       case "mouse-double-click": {
         const p = toGlobalPosition(msg.nx, msg.ny);
-        if (p) await mouse.setPosition(p);
+        if (p) {
+          await mouse.setPosition(p);
+          try { trackedCursor = await mouse.getPosition(); } catch {}
+        }
         await mouse.doubleClick(msg.button === "right" ? Button.RIGHT : Button.LEFT);
         break;
       }
 
       case "mouse-down": {
         const p = toGlobalPosition(msg.nx, msg.ny);
-        if (p) await mouse.setPosition(p);
+        if (p) {
+          await mouse.setPosition(p);
+          try { trackedCursor = await mouse.getPosition(); } catch {}
+        }
         if (msg.button === "left") await mouse.pressButton(Button.LEFT);
         else if (msg.button === "right") await mouse.pressButton(Button.RIGHT);
         break;

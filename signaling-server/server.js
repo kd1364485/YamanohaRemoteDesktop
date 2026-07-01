@@ -139,7 +139,19 @@ wss.on("connection", (ws) => {
   ws.isAlive = true;
   ws.on("pong", () => { ws.isAlive = true; });
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    // バイナリメッセージ = 映像フレーム。JSONパースせずホスト→クライアントへ素通し。
+    // 巨大なbase64文字列のparse/stringifyを避け、中継サーバーの負荷を最小化する。
+    if (isBinary) {
+      if (role === "host" && hostId) {
+        const clientWs = clients.get(hostId);
+        if (clientWs && clientWs.readyState === clientWs.OPEN) {
+          clientWs.send(raw, { binary: true });
+        }
+      }
+      return;
+    }
+
     let msg;
     try {
       msg = JSON.parse(raw.toString());
@@ -221,15 +233,6 @@ wss.on("connection", (ws) => {
         break;
       }
 
-      case "frame": {
-        if (role !== "host") return;
-        const clientWs = clients.get(hostId);
-        if (clientWs) {
-          clientWs.send(raw.toString());
-        }
-        break;
-      }
-
       case "input": {
         if (role !== "client") return;
         const hostEntry = hosts.get(hostId);
@@ -258,12 +261,58 @@ wss.on("connection", (ws) => {
         break;
       }
 
+      case "cursor": {
+        // ホスト → クライアント: カーソル位置通知
+        if (role !== "host") return;
+        const clientWs = clients.get(hostId);
+        if (clientWs) {
+          clientWs.send(raw.toString());
+        }
+        break;
+      }
+
       case "select-display": {
         // クライアント → ホスト: 表示するディスプレイの切替え要求
         if (role !== "client") return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
           hostEntry.ws.send(raw.toString());
+        }
+        break;
+      }
+
+      case "webrtc-offer": {
+        // ホスト → クライアント: WebRTC SDP offer
+        if (role !== "host") return;
+        const clientWs = clients.get(hostId);
+        if (clientWs) {
+          clientWs.send(raw.toString());
+        }
+        break;
+      }
+
+      case "webrtc-answer": {
+        // クライアント → ホスト: WebRTC SDP answer
+        if (role !== "client") return;
+        const hostEntry = hosts.get(hostId);
+        if (hostEntry) {
+          hostEntry.ws.send(raw.toString());
+        }
+        break;
+      }
+
+      case "webrtc-ice": {
+        // 双方向: WebRTC ICE candidate
+        if (role === "host") {
+          const clientWs = clients.get(hostId);
+          if (clientWs) {
+            clientWs.send(raw.toString());
+          }
+        } else if (role === "client") {
+          const hostEntry = hosts.get(hostId);
+          if (hostEntry) {
+            hostEntry.ws.send(raw.toString());
+          }
         }
         break;
       }

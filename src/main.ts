@@ -34,6 +34,169 @@ const DEFAULT_SERVER_URL = buildDefaultServerUrl();
 
 let clientWs: WebSocket | null = null;
 
+// WebRTC関連
+let pc: RTCPeerConnection | null = null;
+let remoteStream: MediaStream | null = null;
+let currentCursor: { x: number; y: number } | null = null;
+// remoteDescriptionセット前に到着したICE candidateを一時保持するバッファ
+let pendingIceCandidates: RTCIceCandidateInit[] = [];
+// 入力/カーソル用DataChannel（P2P直送）。ホストが作成しondatachannelで受信する。
+let inputChannel: RTCDataChannel | null = null;
+// 受信側ジッターバッファの目標(ミリ秒)。超低遅延優先に設定。
+const JITTER_BUFFER_TARGET_MS = 30;
+
+// 入力をホストへ送信する。DataChannel(P2P直送)優先、未接続時はWebSocketリレーにフォールバック。
+function sendInput(obj: object): void {
+  const payload = JSON.stringify(obj);
+  if (inputChannel && inputChannel.readyState === "open") {
+    try { inputChannel.send(payload); return; } catch {}
+  }
+  if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+    clientWs.send(payload);
+  }
+}
+
+// WebRTC接続をセットアップ
+async function setupWebRTC(): Promise<void> {
+  console.log("[client] setupWebRTC called");
+  // 既存の接続があればクリーンアップ
+  if (pc) {
+    try { pc.close(); } catch {}
+    pc = null;
+  }
+  remoteStream = null;
+  inputChannel = null;
+  // ICE candidateバッファをリセット
+  pendingIceCandidates = [];
+
+  // RTCPeerConnection作成
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  console.log("[client] RTCPeerConnection created");
+
+  // ホストが作成したDataChannel(input)を受信
+  pc.ondatachannel = (event) => {
+    if (event.channel.label !== "control") return;
+    console.log("[client] input DataChannel received");
+    inputChannel = event.channel;
+    // ホストからのカーソル位置通知をDataChannelで受信
+    inputChannel.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "cursor") {
+          currentCursor = { x: msg.x, y: msg.y };
+          drawCursorOverlay();
+        }
+      } catch {}
+    };
+  };
+
+  // Trackイベント: リモートストリームを受信
+  pc.ontrack = (event) => {
+    console.log("Received remote track:", event.track.kind);
+    remoteStream = event.streams[0];
+
+    // 受信側ジッターバッファを軽めに設定して再生遅延を抑える。
+    // 0にするとモバイル回線のパケット並べ替え/遅延でデコード失敗→フリーズを誘発するため、
+    // 完全な無効化は避け、控えめな目標値(既定120ms)に留める。
+    try {
+      const receiver = event.receiver as RTCRtpReceiver & {
+        jitterBufferTarget?: number | null;
+        playoutDelayHint?: number | null;
+      };
+      // 新しいAPI: jitterBufferTarget（ミリ秒）
+      if ("jitterBufferTarget" in receiver) {
+        receiver.jitterBufferTarget = JITTER_BUFFER_TARGET_MS;
+      }
+      // 旧API: playoutDelayHint（秒）
+      if ("playoutDelayHint" in receiver) {
+        receiver.playoutDelayHint = JITTER_BUFFER_TARGET_MS / 1000;
+      }
+    } catch (err) {
+      console.warn("jitterBufferTarget setting failed:", err);
+    }
+
+    const video = document.getElementById("remote-video") as HTMLVideoElement | null;
+    if (video && remoteStream) {
+      video.srcObject = remoteStream;
+      video.play().catch((err) => console.error("Video play error:", err));
+    }
+  };
+
+  // ICE candidateイベント
+  pc.onicecandidate = (event) => {
+    if (event.candidate && clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: "webrtc-ice",
+        candidate: event.candidate.toJSON(),
+      }));
+    }
+  };
+
+  console.log("WebRTC setup complete");
+}
+
+// WebRTC Offer受信処理
+async function handleWebRTCOffer(sdp: string): Promise<void> {
+  // 既存の接続があればクリーンアップ（ディスプレイ切り替え時など）
+  if (pc) {
+    try { pc.close(); } catch {}
+    pc = null;
+    remoteStream = null;
+  }
+
+  // 新しい接続を作成
+  await setupWebRTC();
+  if (!pc) return;
+
+  try {
+    await (pc as RTCPeerConnection).setRemoteDescription({ type: "offer", sdp });
+    console.log("[client] remoteDescription set");
+
+    // remoteDescriptionセット前に到着してバッファリングしたICE candidateをフラッシュ
+    if (pendingIceCandidates.length > 0) {
+      console.log(`[client] Flushing ${pendingIceCandidates.length} buffered ICE candidates`);
+      for (const c of pendingIceCandidates) {
+        try {
+          await (pc as RTCPeerConnection).addIceCandidate(c);
+        } catch (err) {
+          console.error("WebRTC addIceCandidate (buffered) error:", err);
+        }
+      }
+      pendingIceCandidates = [];
+    }
+
+    const answer = await (pc as RTCPeerConnection).createAnswer();
+    await (pc as RTCPeerConnection).setLocalDescription(answer);
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: "webrtc-answer",
+        sdp: (pc as RTCPeerConnection).localDescription?.sdp,
+      }));
+    }
+    console.log("WebRTC answer sent");
+  } catch (err) {
+    console.error("WebRTC offer handling error:", err);
+  }
+}
+
+// WebRTC ICE candidate受信処理
+async function handleWebRTCIce(candidate: RTCIceCandidateInit): Promise<void> {
+  if (!pc) return;
+  // remoteDescriptionがまだセットされていない場合はバッファに貯めて後でフラッシュ
+  if (!pc.remoteDescription) {
+    pendingIceCandidates.push(candidate);
+    console.log(`[client] ICE candidate buffered (total: ${pendingIceCandidates.length})`);
+    return;
+  }
+  try {
+    await pc.addIceCandidate(candidate);
+  } catch (err) {
+    console.error("WebRTC addIceCandidate error:", err);
+  }
+}
+
 // ページ読み込み時にサーバーURL入力欄へ自動入力 + 認証状態チェック
 window.addEventListener("DOMContentLoaded", () => {
   const input = document.getElementById("server-url") as HTMLInputElement | null;
@@ -314,6 +477,8 @@ function connectToHost(hostId: string): void {
   setConnectionStatus("接続中...", "yellow");
 
   clientWs = new WebSocket(serverUrl);
+  // 映像フレームはバイナリで受け取る（base64より軽量・高速デコード）
+  clientWs.binaryType = "arraybuffer";
 
   //3段階メッセージフロー
   //[1] auth送信 → [2] auth-ok受信 → [3] connect送信 → [4] connected受信 → 画面共有開始
@@ -337,9 +502,11 @@ function connectToHost(hostId: string): void {
 
     switch (msg.type) {
       case "connected"://ステップ4
+        console.log("[client] connected message received");
         showView("remote-view");
         setConnectionStatus("接続済み", "green");
         setupRemoteCanvas();//canvasの初期化 + 入力イベント登録
+        setupWebRTC();
         break;
 
       case "display-list"://ホストのディスプレイ一覧を受信
@@ -348,8 +515,17 @@ function connectToHost(hostId: string): void {
         renderDisplaySwitcher();
         break;
 
-      case "frame"://5画面受信(継続)
-        drawFrame(msg.data, msg.cursor);
+      case "cursor"://ホストからのカーソル位置通知
+        currentCursor = { x: msg.x, y: msg.y };
+        drawCursorOverlay();
+        break;
+
+      case "webrtc-offer":
+        handleWebRTCOffer(msg.sdp);
+        break;
+
+      case "webrtc-ice":
+        handleWebRTCIce(msg.candidate);
         break;
 
       case "disconnected"://切断通知
@@ -437,55 +613,87 @@ function selectDisplay(displayId: string): void {
 
 // --- Remote canvas & input handling ---
 
+// タッチ操作直後の合成マウスイベントを無視するためのタイマー
+let lastTouchTime = 0;
+const TOUCH_EVENT_COOLDOWN_MS = 500;
+
 function setupRemoteCanvas(): void {
+  const video = document.getElementById("remote-video") as HTMLVideoElement | null;
   const canvas = document.getElementById("remote-canvas") as HTMLCanvasElement | null;
   const placeholder = document.getElementById("remote-placeholder");
   if (placeholder) placeholder.style.display = "none";
-  if (canvas) {
-    canvas.style.display = "block";
-    canvas.width = 1920;
-    canvas.height = 1080;
+  if (video) {
+    video.style.display = "block";
+    if (canvas) canvas.style.display = "block";
 
-    canvas.onmousemove = (e) => {
+    video.onmousemove = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-      const rect = canvas.getBoundingClientRect();
-      // 0..1 の正規化座標で送信（ホスト側で選択ディスプレイの実解像度・位置に変換）
-      const nx = (e.clientX - rect.left) / rect.width;
-      const ny = (e.clientY - rect.top) / rect.height;
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-move", nx, ny }));
+      if (Date.now() - lastTouchTime < TOUCH_EVENT_COOLDOWN_MS) return;
+      const rect = video.getBoundingClientRect();
+      // object-contain を考慮して映像領域内の正規化座標を計算
+      const { nx, ny } = videoToNormalized(video, rect, e.clientX, e.clientY);
+      sendInput({ type: "input", action: "mouse-move", nx, ny });
     };
 
-    canvas.onmousedown = (e) => {
+    video.onmousedown = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-      const rect = canvas.getBoundingClientRect();
-      const nx = (e.clientX - rect.left) / rect.width;
-      const ny = (e.clientY - rect.top) / rect.height;
+      if (Date.now() - lastTouchTime < TOUCH_EVENT_COOLDOWN_MS) { e.preventDefault(); return; }
+      const rect = video.getBoundingClientRect();
+      const { nx, ny } = videoToNormalized(video, rect, e.clientX, e.clientY);
       const button = e.button === 2 ? "right" : "left";
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-down", button, nx, ny }));
+      sendInput({ type: "input", action: "mouse-down", button, nx, ny });
     };
 
-    canvas.onmouseup = (e) => {
+    video.onmouseup = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - lastTouchTime < TOUCH_EVENT_COOLDOWN_MS) { e.preventDefault(); return; }
       const button = e.button === 2 ? "right" : "left";
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-up", button }));
+      sendInput({ type: "input", action: "mouse-up", button });
     };
 
-    canvas.oncontextmenu = (e) => e.preventDefault();
+    video.onclick = (e) => {
+      // タッチ直後の合成クリックイベントを無視
+      if (Date.now() - lastTouchTime < TOUCH_EVENT_COOLDOWN_MS) { e.preventDefault(); return; }
+    };
 
-    canvas.onwheel = (e) => {
+    video.oncontextmenu = (e) => e.preventDefault();
+
+    video.onwheel = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-      clientWs.send(JSON.stringify({ type: "input", action: "mouse-scroll", deltaY: e.deltaY }));
+      sendInput({ type: "input", action: "mouse-scroll", deltaY: e.deltaY });
       e.preventDefault();
     };
 
-    canvas.tabIndex = 0;
-    // 物理キーボードのイベントを受け取れるようフォーカスを当てる
-    canvas.focus();
-    // キーイベントは window 全体で捕捉（canvasのフォーカスに依存せず確実に拾う）
+    video.tabIndex = 0;
+    video.focus();
     attachRemoteKeyboard();
 
-    setupTouchControls(canvas);
+    setupTouchControls(video);
   }
+}
+
+// video要素のobject-contain描画領域を考慮して、マウス座標を0..1の正規化座標に変換
+function videoToNormalized(video: HTMLVideoElement, rect: DOMRect, clientX: number, clientY: number): { nx: number; ny: number } {
+  if (!video.videoWidth || !video.videoHeight) {
+    return { nx: (clientX - rect.left) / rect.width, ny: (clientY - rect.top) / rect.height };
+  }
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const rectAspect = rect.width / rect.height;
+  let renderW: number, renderH: number, offsetX: number, offsetY: number;
+  if (videoAspect > rectAspect) {
+    renderW = rect.width;
+    renderH = rect.width / videoAspect;
+    offsetX = rect.left;
+    offsetY = rect.top + (rect.height - renderH) / 2;
+  } else {
+    renderH = rect.height;
+    renderW = rect.height * videoAspect;
+    offsetX = rect.left + (rect.width - renderW) / 2;
+    offsetY = rect.top;
+  }
+  const nx = Math.max(0, Math.min(1, (clientX - offsetX) / renderW));
+  const ny = Math.max(0, Math.min(1, (clientY - offsetY) / renderH));
+  return { nx, ny };
 }
 
 // --- リモート向けキーボード入力（window全体で捕捉） ---
@@ -497,9 +705,7 @@ const heldKeys = new Set<string>();
 let keyboardAttached = false;
 
 function sendKeyInput(obj: object): void {
-  if (clientWs && clientWs.readyState === WebSocket.OPEN) {
-    clientWs.send(JSON.stringify(obj));
-  }
+  sendInput(obj);
 }
 
 function handleRemoteKeyDown(e: KeyboardEvent): void {
@@ -559,10 +765,10 @@ function detachRemoteKeyboard(): void {
 // --- スマホ向けタッチ操作（トラックパッドモード） ---
 // 指のドラッグ → カーソルを相対移動 / タップ → クリック
 // 2本指ドラッグ → スクロール / 2本指タップ → 右クリック
-function setupTouchControls(canvas: HTMLCanvasElement): void {
+function setupTouchControls(el: HTMLElement): void {
   // ブラウザのスクロール・ズーム・プルダウン更新を無効化
-  canvas.style.touchAction = "none";
-  (canvas.style as any).overscrollBehavior = "none";
+  el.style.touchAction = "none";
+  (el.style as any).overscrollBehavior = "none";
 
   const MOVE_SENSITIVITY = 2.0; // カーソル移動の感度
   const TAP_THRESHOLD_PX = 10;  // この距離以内ならタップとみなす
@@ -583,15 +789,14 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
   let isDragging = false;    // 範囲選択中（左ボタン押しっぱなし）かどうか
 
   const send = (obj: object) => {
-    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify(obj));
-    }
+    sendInput(obj);
   };
 
-  canvas.addEventListener("touchstart", (e) => {
+  el.addEventListener("touchstart", (e) => {
     e.preventDefault();
+    lastTouchTime = Date.now();
     // タップで再フォーカス（物理キーボード入力を拾えるように）
-    canvas.focus();
+    el.focus();
     touchCount = e.touches.length;
     const t = e.touches[0];
     lastX = t.clientX;
@@ -609,8 +814,9 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
     }
   }, { passive: false });
 
-  canvas.addEventListener("touchmove", (e) => {
+  el.addEventListener("touchmove", (e) => {
     e.preventDefault();
+    lastTouchTime = Date.now();
 
     if (e.touches.length === 2) {
       // 2本指 → スクロール
@@ -645,8 +851,9 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
     }
   }, { passive: false });
 
-  canvas.addEventListener("touchend", (e) => {
+  el.addEventListener("touchend", (e) => {
     e.preventDefault();
+    lastTouchTime = Date.now();
     const elapsed = Date.now() - startTime;
 
     if (isDragging) {
@@ -682,32 +889,49 @@ function setupTouchControls(canvas: HTMLCanvasElement): void {
   }, { passive: false });
 }
 
-function drawFrame(base64Data: string, cursor?: { x: number; y: number } | null): void {
+// --- カーソルオーバーレイ描画 ---
+// canvas は video の上に重ねて配置。video の描画サイズに合わせて
+// カーソルを描画する。
+function drawCursorOverlay(): void {
   const canvas = document.getElementById("remote-canvas") as HTMLCanvasElement | null;
-  if (!canvas) return;
+  const video = document.getElementById("remote-video") as HTMLVideoElement | null;
+  if (!canvas || !video || !currentCursor) return;
+
+  // video の実際の表示サイズに canvas を合わせる
+  const container = canvas.parentElement;
+  if (container) {
+    const containerRect = container.getBoundingClientRect();
+    canvas.width = containerRect.width;
+    canvas.height = containerRect.height;
+  }
+
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const img = new Image();
-  img.onload = () => {
-    if (canvas.width !== img.width || canvas.height !== img.height) {
-      canvas.width = img.width;
-      canvas.height = img.height;
-    }
-    ctx.drawImage(img, 0, 0);
-    // ホストから受け取ったカーソル位置に矢印を重ねて描画
-    if (cursor) {
-      drawCursor(ctx, cursor.x * canvas.width, cursor.y * canvas.height, canvas.width);
-    }
-  };
-  img.src = `data:image/jpeg;base64,${base64Data}`;
+  // video の object-contain 描画領域を計算
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const containerAspect = canvas.width / canvas.height;
+  let renderW: number, renderH: number, offsetX: number, offsetY: number;
+  if (videoAspect > containerAspect) {
+    renderW = canvas.width;
+    renderH = canvas.width / videoAspect;
+    offsetX = 0;
+    offsetY = (canvas.height - renderH) / 2;
+  } else {
+    renderH = canvas.height;
+    renderW = canvas.height * videoAspect;
+    offsetX = (canvas.width - renderW) / 2;
+    offsetY = 0;
+  }
+
+  const cx = offsetX + currentCursor.x * renderW;
+  const cy = offsetY + currentCursor.y * renderH;
+  drawCursor(ctx, cx, cy, renderW);
 }
 
-// canvas上に矢印カーソルを描画（白塗り+黒縁で視認性を確保）
-function drawCursor(ctx: CanvasRenderingContext2D, x: number, y: number, canvasWidth: number): void {
-  // canvas幅に応じてサイズを調整（縮小表示でも見えるよう大きめ）
-  const s = Math.max(18, canvasWidth / 45);
-  // 標準的な矢印カーソルの形状（先端が原点）
+function drawCursor(ctx: CanvasRenderingContext2D, x: number, y: number, renderWidth: number): void {
+  const s = Math.max(14, renderWidth / 60);
   const pts: [number, number][] = [
     [0, 0], [0, 1], [0.28, 0.75], [0.45, 1.15],
     [0.6, 1.08], [0.42, 0.68], [0.7, 0.68],

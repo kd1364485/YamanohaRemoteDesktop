@@ -1,7 +1,14 @@
 import { WebSocket } from "ws";
 import screenshot from "screenshot-desktop";
-import sharp from "sharp";
+import { spawn } from "child_process";
 import { mouse, keyboard, Button, Key } from "@nut-tree-fork/nut-js";
+import { createSocket } from "dgram";
+import {
+  RTCPeerConnection,
+  MediaStreamTrack,
+  RTCRtpCodecParameters,
+  RtpPacket,
+} from "werift";
 
 const SERVER_URL = process.env.SIGNALING_URL || "ws://localhost:8080";
 const AUTH_TOKEN = process.env.SIGNALING_TOKEN || null;
@@ -9,10 +16,23 @@ const DEVICE_NAME = process.env.SIGNALING_DEVICE_NAME || "PC";
 // プロセス起動時に一度だけ生成する固定ID。再接続時の重複登録を一意に識別するために使う。
 const INSTANCE_ID = `inst-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-// --- 画質・パフォーマンス設定（ラグ対策） ---
-const TARGET_WIDTH = Number(process.env.STREAM_WIDTH) || 1280; // 送信画像の横幅（縮小）
-const JPEG_QUALITY = Number(process.env.STREAM_QUALITY) || 55; // JPEG品質 0-100
-const TARGET_FPS = Number(process.env.STREAM_FPS) || 30;       // 目標フレームレート
+// --- 画質・パフォーマンス設定 ---
+const TARGET_FPS = Number(process.env.STREAM_FPS) || 30;       // 目標フレームレート（高更新頻度）
+const STREAM_BITRATE = Number(process.env.STREAM_BITRATE) || 4; // 目標ビットレート(Mbps)
+const STREAM_WIDTH = Number(process.env.STREAM_WIDTH) || 500;  // エンコード幅（画質向上）
+const FFMPEG_PATH = process.env.FFMPEG_PATH || "ffmpeg";
+// GOP（キーフレーム間隔・フレーム数）。0.5秒ごとにキーフレームを生成。
+// 画面変化時のパケットロスに対応し、PLI即時キーフレームと合わせて自己回復を最大化。
+// 帯域への影響はあるが、安定性優先。
+const STREAM_GOP = Number(process.env.STREAM_GOP) || Math.max(1, Math.round(TARGET_FPS / 2));
+// ddagrab(GPU DXGIキャプチャ)を使うか。デフォルトOFF。
+// ハイブリッドGPU(Intel iGPU + NVIDIA dGPU)構成ではddagrabが全モニターを
+// キャプチャできない（iGPU所有ディスプレイはdGPU経由で取得不可、output_idxも配列順と不一致）ため、
+// 誤モニターキャプチャを避けデフォルト無効。単一GPUのデスクトップ等ではUSE_DDAGRAB=1で有効化可能。
+// 有効時もddagrab失敗を検知すると自動でgdigrabにフォールバックする。
+const USE_DDAGRAB = process.env.USE_DDAGRAB === "1";
+// ddagrab用のGPUアダプタ指定（例: hw:0=1台目, hw:1=2台目）。nvencのあるGPUを指定する。
+const DDAGRAB_DEVICE = process.env.DDAGRAB_DEVICE || "d3d11va=hw:0";
 
 mouse.config.mouseSpeed = 0;
 keyboard.config.autoDelayMs = 0;
@@ -22,6 +42,186 @@ let isStreaming = false;
 let displays = [];          // 利用可能なディスプレイ一覧
 let currentDisplay = null;  // 現在キャプチャ中のディスプレイ
 let trackedCursor = null;    // カーソル位置（論理座標）を自前で追跡。nut-jsのgetPosition()がセカンダリディスプレイで不正確なため。
+
+// WebRTC関連
+let pc = null;              // RTCPeerConnection
+let videoTrack = null;      // MediaStreamTrack
+let videoTransceiver = null; // RTCRtpTransceiver（RTPSenderのSSRC確認用）
+let udpSocket = null;       // ffmpeg RTP受信用UDPソケット
+let rtpPort = 0;            // RTP受信ポート
+let inputChannel = null;    // 入力/カーソル用DataChannel（P2P直送）
+
+// WebRTC接続をセットアップ
+async function setupWebRTC() {
+  // 既存の接続があればクリーンアップ
+  if (pc) {
+    try { await pc.close(); } catch {}
+    pc = null;
+  }
+  if (videoTrack) {
+    try { videoTrack.stop(); } catch {}
+    videoTrack = null;
+  }
+  if (udpSocket) {
+    try { udpSocket.close(); } catch {}
+    udpSocket = null;
+  }
+  inputChannel = null;
+
+  // RTCPeerConnection作成
+  pc = new RTCPeerConnection({
+    codecs: {
+      audio: [],
+      video: [
+        new RTCRtpCodecParameters({
+          mimeType: "video/H264",
+          clockRate: 90000,
+          payloadType: 96,
+          rtcpFeedback: [
+            { type: "nack" },
+            { type: "ccm", parameter: "fir" },
+            { type: "goog-remb" },
+          ],
+        }),
+      ],
+    },
+  });
+
+  // MediaStreamTrack作成
+  videoTrack = new MediaStreamTrack({ kind: "video" });
+  videoTransceiver = pc.addTransceiver(videoTrack, { direction: "sendonly" });
+  console.log("Video track created, Sender SSRC:", videoTransceiver.sender.ssrc);
+
+  // 入力/カーソル用DataChannel（P2P直送）を作成。
+  // ホストがオファー側なのでここで作成し、SDPに含めてネゴシエーションする。
+  // maxRetransmits:0 + ordered:false で低遅延の非信頼転送（入力は最新値が重要）。
+  // 失敗しても映像接続は継続できるよう例外を握りつぶす（入力はWebSocketにフォールバック）。
+  try {
+    inputChannel = pc.createDataChannel("input", {
+      ordered: false,
+      maxRetransmits: 0,
+    });
+    inputChannel.onMessage.subscribe(async (data) => {
+      try {
+        const text = typeof data === "string" ? data : data.toString();
+        const msg = JSON.parse(text);
+        await handleInput(msg);
+      } catch (err) {
+        console.error("[DataChannel] input parse error:", err);
+      }
+    });
+    inputChannel.stateChanged.subscribe((state) => {
+      console.log("[DataChannel] input channel state:", state);
+    });
+  } catch (err) {
+    console.error("[DataChannel] setup failed (falling back to WebSocket input):", err);
+    inputChannel = null;
+  }
+
+  // ICE candidateイベント
+  pc.onIceCandidate.subscribe((candidate) => {
+    if (candidate && ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({
+        type: "webrtc-ice",
+        candidate: candidate.toJSON(),
+      }));
+    }
+  });
+
+  // Offer作成
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Offerをクライアントへ送信
+  if (ws && ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({
+      type: "webrtc-offer",
+      sdp: pc.localDescription.sdp,
+    }));
+  }
+
+  // ランダムポートでUDPソケットを作成
+  const { randomPort } = await import("werift");
+  rtpPort = await randomPort();
+  udpSocket = createSocket("udp4");
+  udpSocket.bind(rtpPort);
+
+  // RTPパケット受信 → track.writeRtp（weriftのRTPSenderが内部でSSRC/PT/SeqNoを自動書き換えする）
+  let rtpCount = 0;
+  let firstPacketLogged = false;
+  udpSocket.on("message", (data) => {
+    rtpCount++;
+    if (rtpCount % 300 === 0) {
+      console.log(`Received ${rtpCount} RTP packets, size: ${data.length}`);
+    }
+    if (videoTrack) {
+      try {
+        const rtp = RtpPacket.deSerialize(data);
+
+        // デバッグ: 最初のパケットの情報をログ出力
+        if (!firstPacketLogged) {
+          firstPacketLogged = true;
+          console.log(`[RTP初回パケット] ffmpeg SSRC: ${rtp.header.ssrc}, PT: ${rtp.header.payloadType}, SeqNo: ${rtp.header.sequenceNumber}, Timestamp: ${rtp.header.timestamp}`);
+          console.log(`[RTP Sender] SSRC: ${videoTransceiver?.sender?.ssrc}, コーデックPT: ${videoTransceiver?.sender?.codec?.payloadType}`);
+        }
+
+        // SSRCとPayloadTypeはwerift内部のRTPSender.sendRtp()で自動書き換えされるため手動設定不要
+        videoTrack.writeRtp(rtp);
+      } catch (err) {
+        console.error("RTP parse error:", err);
+      }
+    }
+  });
+
+  // PLI（Picture Loss Indication）ハンドリング:
+  // ブラウザがパケットロスを検出してキーフレームを要求したとき、
+  // ffmpegのstdinに'f'を送って即座にキーフレームを強制生成する。
+  // プロセス再起動は行わず、映像ストリームを維持したまま回復する。
+  // クールダウンなしで即座にキーフレーム生成（画面変化時の即時回復優先）
+  let pliCount = 0;
+  videoTransceiver.sender.onPictureLossIndication.subscribe(() => {
+    pliCount++;
+    console.log(`[PLI] キーフレーム要求受信 (${pliCount}回目) - ffmpegに即座にキーフレーム命令`);
+    if (ffmpegProc && ffmpegProc.stdin && ffmpegProc.stdin.writable) {
+      try {
+        ffmpegProc.stdin.write("f");
+      } catch (err) {
+        console.warn("[PLI] stdin write failed:", err.message);
+      }
+    }
+  });
+
+  // DTLS接続完了を待ってからffmpegを起動する。
+  // weriftのRTPSenderはDTLS未接続中のRTPパケットを全て破棄するため、
+  // 接続完了前にffmpegを起動するとキーフレームが失われ映像がフリーズする。
+  videoTransceiver.sender.onReady.subscribe(() => {
+    console.log("[WebRTC] DTLS connected, starting ffmpeg...");
+    startStreaming();
+  });
+
+  console.log(`WebRTC setup complete, RTP listening on port ${rtpPort}, waiting for DTLS connection...`);
+}
+
+// WebRTC Answer受信処理
+async function handleWebRTCAnswer(sdp) {
+  if (!pc) return;
+  try {
+    await pc.setRemoteDescription({ type: "answer", sdp });
+    console.log("WebRTC remote description set");
+  } catch (err) {
+    console.error("WebRTC setRemoteDescription error:", err);
+  }
+}
+
+// WebRTC ICE candidate受信処理
+async function handleWebRTCIce(candidate) {
+  if (!pc) return;
+  try {
+    await pc.addIceCandidate(candidate);
+  } catch (err) {
+    console.error("WebRTC addIceCandidate error:", err);
+  }
+}
 
 // ディスプレイ一覧を取得し、現在のディスプレイを決定する
 async function loadDisplays() {
@@ -38,8 +238,12 @@ async function loadDisplays() {
       return {
         id: d.id,
         label: `ディスプレイ${i + 1} (${d.width}×${d.height})`,
-        width: d.width,   // 物理ピクセル（ラベル表示用）
+        outputIdx: i,     // ddagrab用のDXGI出力インデックス（列挙順）
+        width: d.width,   // 物理ピクセル（ラベル表示用・ffmpegキャプチャサイズ）
         height: d.height,
+        left: d.left,     // 物理ピクセル座標（gdigrabのoffsetに使用）
+        top: d.top,
+        dpiScale: scale,  // DPIスケール（setPosition補正用）
         // left/top は仮想画面上の物理ピクセル座標 → プライマリのスケールで論理化
         // width/height は各ディスプレイ自身のスケールで論理化
         lLeft: d.left / primaryScale,
@@ -80,6 +284,24 @@ function toGlobalPosition(nx, ny) {
   };
 }
 
+// nut-js の setPosition は論理座標を受け取るが、セカンダリディスプレイで
+// DPIスケールが異なる場合、指定座標が実際の位置と一致しない（DPI差分だけ縮小される）。
+// これを補正するため、ディスプレイ原点からの相対位置を secScale/primaryScale 倍して渡す。
+// trackedCursor には補正前の論理座標を保持し、クライアント描画に使う。
+const _primaryScale = () => displays.find((d) => d.primary)?.dpiScale || 1;
+
+async function setMousePosition(pos) {
+  if (currentDisplay && !currentDisplay.primary) {
+    const ratio = currentDisplay.dpiScale / _primaryScale();
+    await mouse.setPosition({
+      x: Math.round(currentDisplay.lLeft + (pos.x - currentDisplay.lLeft) * ratio),
+      y: Math.round(currentDisplay.lTop + (pos.y - currentDisplay.lTop) * ratio),
+    });
+  } else {
+    await mouse.setPosition(pos);
+  }
+}
+
 function connect() {
   ws = new WebSocket(SERVER_URL);
 
@@ -107,10 +329,11 @@ function connect() {
         break;
 
       case "client-connected":
-        console.log("Client connected, starting stream...");
+        console.log("Client connected, setting up WebRTC...");
         await loadDisplays();
         sendDisplayList();
-        startStreaming();
+        await setupWebRTC();
+        // ffmpegの起動はsetupWebRTC内でDTLS接続完了後に自動実行される
         break;
 
       case "select-display": {
@@ -118,16 +341,20 @@ function connect() {
         if (target) {
           currentDisplay = target;
           console.log(`Display switched to: ${target.label}`);
+          // WebRTC接続とffmpegを再起動して新しいディスプレイをキャプチャ
+          const wasStreaming = isStreaming;
+          stopStreaming();
+          await setupWebRTC();
           // カーソルを選択ディスプレイの中央へ移動し、追跡位置も更新
           const cx = Math.round(target.lLeft + target.lWidth / 2);
           const cy = Math.round(target.lTop + target.lHeight / 2);
           trackedCursor = { x: cx, y: cy };
           try {
-            await mouse.setPosition(trackedCursor);
-            // setPosition した座標と実際の位置が異なる場合があるため、
-            // getPosition() で実際の位置を取り直して描画位置を同期させる
-            trackedCursor = await mouse.getPosition();
+            await setMousePosition(trackedCursor);
           } catch {}
+          if (wasStreaming) {
+            setTimeout(() => startStreaming(), 300);
+          }
         }
         break;
       }
@@ -139,6 +366,14 @@ function connect() {
       case "disconnected":
         console.log("Client disconnected:", msg.message);
         stopStreaming();
+        break;
+
+      case "webrtc-answer":
+        await handleWebRTCAnswer(msg.sdp);
+        break;
+
+      case "webrtc-ice":
+        await handleWebRTCIce(msg.candidate);
         break;
     }
   });
@@ -154,67 +389,159 @@ function connect() {
   });
 }
 
-async function startStreaming() {
+// --- ffmpeg H.264 (h264_nvenc) による画面キャプチャ → RTP ストリーミング ---
+// gdigrab で画面をキャプチャし、h264_nvenc でハードウェアエンコード、
+// RTPパケットとしてUDPでlocalhost:rtpPortに出力する。
+// RTPパケットはUDPソケットで受信し、weriftのMediaStreamTrack.writeRtp()でWebRTCへ転送。
+
+let ffmpegProc = null;
+let cursorTimer = null;
+// 実際に使用中のキャプチャ方式（ddagrab失敗時にfalseへ落としてgdigrabにフォールバック）
+let useDdagrab = USE_DDAGRAB;
+// ddagrabで起動したffmpegがキャプチャ/エンコード初期化エラーを出したか
+let ddagrabErrorDetected = false;
+
+// 共通のエンコード幅に合わせたスケールフィルタ式（縦横どちらが長くてもSTREAM_WIDTHに収める）
+const SCALE_EXPR = `scale='if(gte(iw,ih),${STREAM_WIDTH},-2):if(gte(iw,ih),-2,${STREAM_WIDTH})'`;
+
+// h264_nvenc共通エンコードオプション（入力フィルタ後に付与）
+function nvencArgs(gop) {
+  return [
+    "-c:v", "h264_nvenc",
+    "-preset", "p1",
+    "-tune", "ull",
+    "-profile:v", "baseline",
+    "-level", "4.0",
+    "-pix_fmt", "yuv420p",
+    "-g", String(gop),
+    "-keyint_min", String(gop),
+    "-bf", "0",
+    "-forced-idr", "1",
+    "-b:v", `${STREAM_BITRATE}M`,
+    "-maxrate", `${STREAM_BITRATE}M`,
+    "-bufsize", `${STREAM_BITRATE * 2}M`,
+    "-rc", "cbr",
+    "-zerolatency", "1",
+    "-an",
+    "-f", "rtp",
+    "-payload_type", "96",
+    `rtp://127.0.0.1:${rtpPort}`,
+  ];
+}
+
+// ddagrab(DXGI Desktop Duplication)でGPU上でキャプチャし、nvencでエンコードする引数。
+// GDIのBitBltを使わずGPUで取得するため、CPU負荷とキャプチャ遅延が大幅に下がる。
+function buildDdagrabArgs(display) {
+  const gop = STREAM_GOP;
+  return [
+    // nvencのあるGPUアダプタでDXGIキャプチャ用のd3d11デバイスを初期化
+    "-init_hw_device", DDAGRAB_DEVICE,
+    "-filter_complex",
+    // ddagrabでoutput_idxのモニターをGPUキャプチャ→hwdownloadでシステムメモリへ→スケール
+    `ddagrab=output_idx=${display.outputIdx}:framerate=${TARGET_FPS}:draw_mouse=0,hwdownload,format=bgra,${SCALE_EXPR}`,
+    ...nvencArgs(gop),
+  ];
+}
+
+function buildGdigrabArgs(display) {
+  const gop = STREAM_GOP;
+  return [
+    "-f", "gdigrab",
+    "-framerate", String(TARGET_FPS),
+    "-draw_mouse", "0",
+    "-offset_x", String(display.left),
+    "-offset_y", String(display.top),
+    "-video_size", `${display.width}x${display.height}`,
+    "-i", "desktop",
+    "-vf", SCALE_EXPR,
+    ...nvencArgs(gop),
+  ];
+}
+
+// 現在の設定に応じてffmpeg引数を生成する。
+function buildFfmpegArgs(display) {
+  return useDdagrab ? buildDdagrabArgs(display) : buildGdigrabArgs(display);
+}
+
+function startStreaming() {
   if (isStreaming) return;
+  if (!currentDisplay) return;
   isStreaming = true;
 
-  const minFrameMs = 1000 / TARGET_FPS;
+  const usingDdagrabNow = useDdagrab;
+  ddagrabErrorDetected = false;
+  const startedAt = Date.now();
 
-  // 逐次ループ: 1フレームのキャプチャ→圧縮→送信が完了してから次へ進む。
-  // setIntervalと違い処理が詰まらず、遅延の蓄積を防ぐ。
-  while (isStreaming) {
-    const frameStart = Date.now();
+  const args = buildFfmpegArgs(currentDisplay);
+  console.log(`Starting ffmpeg (${usingDdagrabNow ? "ddagrab" : "gdigrab"}):`, FFMPEG_PATH, args.join(" "));
+  ffmpegProc = spawn(FFMPEG_PATH, args, { stdio: ["pipe", "pipe", "pipe"] });
 
-    // WebSocketが開いていない場合、少し待機してから再試行
-    if (!ws || ws.readyState !== ws.OPEN) {
-      await sleep(50);
-      continue;
+  ffmpegProc.stderr.on("data", (chunk) => {
+    const text = chunk.toString().trim();
+    if (text && !text.startsWith("frame=")) console.error("ffmpeg:", text);
+    // ddagrab固有の初期化失敗を検知（DXGI未対応・出力なし等）
+    if (usingDdagrabNow && /ddagrab|Desktop Duplication|DXGI|No such filter|Invalid argument|Error initializing/i.test(text)) {
+      ddagrabErrorDetected = true;
     }
+  });
 
-    // 送信バッファが詰まっている（前フレームが送り切れていない）ら、
-    // 新しいフレームを送らずスキップして遅延の蓄積を防ぐ。
-    if (ws.bufferedAmount > 1_000_000) {
-      await sleep(minFrameMs);
-      continue;
+  ffmpegProc.on("close", (code) => {
+    console.log(`ffmpeg exited with code ${code}`);
+    ffmpegProc = null;
+    // ddagrabで起動直後(5秒以内)に異常終了し、エラーを検知した場合はgdigrabにフォールバック
+    if (usingDdagrabNow && isStreaming && (ddagrabErrorDetected || (code !== 0 && Date.now() - startedAt < 5000))) {
+      console.warn("[capture] ddagrab failed, falling back to gdigrab");
+      useDdagrab = false;
+      isStreaming = false;
+      setTimeout(() => startStreaming(), 200);
+      return;
     }
+    // PLIによる意図的な再起動の場合はisStreamingをfalseにしない
+    // （restartFfmpeg内で管理するため）
+  });
 
-    try {
-      // PNG形式で取得し、sharpで縮小+JPEG圧縮（データ量を大幅削減）
-      // currentDisplay が指定されていればそのディスプレイのみキャプチャ
-      const captureOpts = { format: "png" };
-      if (currentDisplay) captureOpts.screen = currentDisplay.id;
-      const raw = await screenshot(captureOpts);
-      const jpeg = await sharp(raw)
-        .resize({ width: TARGET_WIDTH, withoutEnlargement: true })
-        .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-        .toBuffer();
-
-      // カーソル位置を取得し、選択ディスプレイ基準の正規化座標(0..1)に変換。
-      // 特定ディスプレイ指定キャプチャではOSがカーソルを描画しないため、
-      // クライアント側で重ねて描画できるよう位置を一緒に送る。
-      // getPosition()がセカンダリディスプレイで不正確なため trackedCursor を優先。
-      let cursor = null;
-      if (currentDisplay && trackedCursor) {
-        const cx = (trackedCursor.x - currentDisplay.lLeft) / currentDisplay.lWidth;
-        const cy = (trackedCursor.y - currentDisplay.lTop) / currentDisplay.lHeight;
-        if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) cursor = { x: cx, y: cy };
-      }
-
-      ws.send(JSON.stringify({ type: "frame", data: jpeg.toString("base64"), cursor }));
-    } catch (err) {
-      console.error("Capture error:", err.message);
-    }
-
-    // フレームレート上限を超えないよう待機
-    const elapsed = Date.now() - frameStart;
-    if (elapsed < minFrameMs) {
-      await sleep(minFrameMs - elapsed);
-    }
+  // カーソル位置を定期的に送信（映像とは別のJSONメッセージ）
+  if (!cursorTimer) {
+    cursorTimer = setInterval(() => {
+      if (!isStreaming) { clearInterval(cursorTimer); cursorTimer = null; return; }
+      sendCursorUpdate();
+    }, 33);
   }
+}
+
+function sendCursorUpdate() {
+  if (!currentDisplay || !trackedCursor) return;
+  const cx = (trackedCursor.x - currentDisplay.lLeft) / currentDisplay.lWidth;
+  const cy = (trackedCursor.y - currentDisplay.lTop) / currentDisplay.lHeight;
+  if (cx < 0 || cx > 1 || cy < 0 || cy > 1) return;
+  const payload = JSON.stringify({ type: "cursor", x: cx, y: cy });
+  // DataChannel(P2P直送)優先、未接続時はWebSocketリレーにフォールバック
+  if (inputChannel && inputChannel.readyState === "open") {
+    try { inputChannel.send(payload); return; } catch {}
+  }
+  if (ws && ws.readyState === ws.OPEN) ws.send(payload);
 }
 
 function stopStreaming() {
   isStreaming = false;
+  if (cursorTimer) { clearInterval(cursorTimer); cursorTimer = null; }
+  if (ffmpegProc) {
+    try { ffmpegProc.kill("SIGTERM"); } catch {}
+    ffmpegProc = null;
+  }
+  if (pc) {
+    try { pc.close(); } catch {}
+    pc = null;
+  }
+  if (videoTrack) {
+    try { videoTrack.stop(); } catch {}
+    videoTrack = null;
+  }
+  videoTransceiver = null;
+  if (udpSocket) {
+    try { udpSocket.close(); } catch {}
+    udpSocket = null;
+  }
 }
 
 function sleep(ms) {
@@ -227,8 +554,8 @@ async function handleInput(msg) {
       case "mouse-move": {
         const p = toGlobalPosition(msg.nx, msg.ny);
         if (p) {
-          await mouse.setPosition(p);
-          try { trackedCursor = await mouse.getPosition(); } catch {}
+          trackedCursor = p;
+          await setMousePosition(p);
         }
         break;
       }
@@ -247,7 +574,7 @@ async function handleInput(msg) {
           ny = Math.max(currentDisplay.lTop, Math.min(ny, currentDisplay.lTop + currentDisplay.lHeight - 1));
         }
         trackedCursor = { x: nx, y: ny };
-        await mouse.setPosition(trackedCursor);
+        await setMousePosition(trackedCursor);
         break;
       }
 
@@ -255,8 +582,8 @@ async function handleInput(msg) {
         // 正規化座標が指定されていれば移動してからクリック、なければ現在位置でクリック
         const p = toGlobalPosition(msg.nx, msg.ny);
         if (p) {
-          await mouse.setPosition(p);
-          try { trackedCursor = await mouse.getPosition(); } catch {}
+          trackedCursor = p;
+          await setMousePosition(p);
         }
         if (msg.button === "right") {
           await mouse.click(Button.RIGHT);
@@ -269,8 +596,8 @@ async function handleInput(msg) {
       case "mouse-double-click": {
         const p = toGlobalPosition(msg.nx, msg.ny);
         if (p) {
-          await mouse.setPosition(p);
-          try { trackedCursor = await mouse.getPosition(); } catch {}
+          trackedCursor = p;
+          await setMousePosition(p);
         }
         await mouse.doubleClick(msg.button === "right" ? Button.RIGHT : Button.LEFT);
         break;
@@ -279,8 +606,8 @@ async function handleInput(msg) {
       case "mouse-down": {
         const p = toGlobalPosition(msg.nx, msg.ny);
         if (p) {
-          await mouse.setPosition(p);
-          try { trackedCursor = await mouse.getPosition(); } catch {}
+          trackedCursor = p;
+          await setMousePosition(p);
         }
         if (msg.button === "left") await mouse.pressButton(Button.LEFT);
         else if (msg.button === "right") await mouse.pressButton(Button.RIGHT);

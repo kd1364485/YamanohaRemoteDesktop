@@ -175,8 +175,9 @@
           </div>
           <!-- ディスプレイ切替えバー（複数ディスプレイ時のみ表示） -->
           <div id="display-switcher" class="hidden flex flex-wrap items-center justify-center gap-2"></div>
-          <div class="flex-1 min-h-0 min-w-0 bg-black rounded-xl border border-white/10 flex items-center justify-center overflow-hidden">
-            <canvas id="remote-canvas" class="max-w-full max-h-full object-contain"></canvas>
+          <div class="flex-1 min-h-0 min-w-0 bg-black rounded-xl border border-white/10 flex items-center justify-center overflow-hidden relative">
+            <video id="remote-video" class="max-w-full max-h-full object-contain" autoplay muted playsinline></video>
+            <canvas id="remote-canvas" class="absolute inset-0 w-full h-full pointer-events-none"></canvas>
             <div id="remote-placeholder" class="text-gray-600 text-sm">
               リモート画面がここに表示されます
             </div>

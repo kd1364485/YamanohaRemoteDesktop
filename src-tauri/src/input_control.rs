@@ -302,6 +302,80 @@ pub fn key_name_to_vk(key: &str) -> Option<u32> {
     }
 }
 
+/// @brief リモートからの入力メッセージをパースして対応する入力イベントを注入する
+pub fn handle_remote_input(message: &str) {
+    let json = match serde_json::from_str::<serde_json::Value>(message) {
+        Ok(value) => value,
+        Err(error) => {
+            std::println!("[Rust Input] JSON parse failed: {}", error);
+            return;
+        }
+    };
+    if json["type"].as_str() != Some("input") {
+        return;
+    }
+
+    let action = json["action"].as_str().unwrap_or("");
+    let result = match action {
+        "mouse-move" => {
+            let nx = json["nx"].as_f64().unwrap_or(0.0);
+            let ny = json["ny"].as_f64().unwrap_or(0.0);
+            let width = get_screen_width();
+            let height = get_screen_height();
+            inject_mouse_move(
+                (nx * width as f64) as i32,
+                (ny * height as f64) as i32,
+            )
+        }
+        "mouse-move-rel" => inject_mouse_move_rel(
+            json["dx"].as_i64().unwrap_or(0) as i32,
+            json["dy"].as_i64().unwrap_or(0) as i32,
+        ),
+        "mouse-down" | "mouse-up" => inject_mouse_click(
+            parse_button_name(
+                json["button"].as_str().unwrap_or("left")),
+            action == "mouse-down",
+        ),
+        "mouse-click" => inject_click(
+            json["button"].as_str().unwrap_or("left"), 1),
+        "mouse-double-click" => inject_click(
+            json["button"].as_str().unwrap_or("left"), 2),
+        "mouse-scroll" => inject_mouse_scroll(
+            json["deltaY"].as_f64().unwrap_or(0.0).round() as i32),
+        "key" => {
+            let key = json["key"].as_str().unwrap_or("");
+            match key_name_to_vk(key) {
+                Some(vk) => inject_key_event(
+                    vk, json["isDown"].as_bool().unwrap_or(false)),
+                None => Err(format!("Unsupported key: {}", key)),
+            }
+        }
+        "type-char" => {
+            match json["char"].as_str().and_then(|value| value.chars().next()) {
+                Some(character) => inject_unicode_char(character),
+                None => Err("Missing character".to_string()),
+            }
+        }
+        _ => Err(format!("Unsupported action: {}", action)),
+    };
+
+    if let Err(error) = result {
+        std::println!("[Rust Input] {} failed: {}", action, error);
+        return;
+    }
+
+    std::println!("[Rust Input] action applied: {}", action);
+}
+
+fn inject_click(button_name: &str, count: usize) -> Result<(), String> {
+    let button = parse_button_name(button_name);
+    for _ in 0..count {
+        inject_mouse_click(button, true)?;
+        inject_mouse_click(button, false)?;
+    }
+    Ok(())
+}
+
 /// @brief Unicode 文字を直接入力する（印字可能文字用）
 pub fn inject_unicode_char(ch: char) -> Result<(), String> {
     unsafe {

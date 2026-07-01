@@ -284,8 +284,6 @@ bool DesktopDuplicator::AcquireFrame(CapturedFrame& frame, uint32_t timeout_ms) 
                     cached_desc_.Width, cached_desc_.Height, cached_desc_.Format);
     }
 
-    // フレーム情報を保存
-    last_frame_info_ = frame_info;
     frame_acquired_ = true;
 
     // 結果を格納
@@ -314,17 +312,6 @@ void DesktopDuplicator::ReleaseFrame() {
         }
         frame_acquired_ = false;
     }
-}
-
-// ---------------------------------------------------------------------------
-// カーソル情報の取得
-// ---------------------------------------------------------------------------
-CursorInfo DesktopDuplicator::GetCursorInfo() const {
-    CursorInfo info{};
-    info.position.x = last_frame_info_.PointerPosition.Position.x;
-    info.position.y = last_frame_info_.PointerPosition.Position.y;
-    info.visible = (last_frame_info_.PointerPosition.Visible != FALSE);
-    return info;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +411,6 @@ void DesktopDuplicator::Shutdown() {
     height_ = 0;
     initialized_ = false;
     desc_cached_ = false;
-    last_frame_info_ = {};
 
     std::printf("[DesktopDuplicator] シャットダウン完了\n");
 }

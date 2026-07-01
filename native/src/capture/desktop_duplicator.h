@@ -33,13 +33,6 @@ struct CapturedFrame {
     bool has_new_frame;                    // 新しいフレームがあるか（画面変化検出）
 };
 
-/// @brief カーソル情報
-struct CursorInfo {
-    POINT position;   // カーソル位置（デスクトップ座標）
-    bool visible;      // カーソルが可視かどうか
-    // カーソル形状データは Phase 5 で追加予定
-};
-
 /// @brief Desktop Duplication API ラッパークラス
 /// Windows 8 以降の DXGI Output Duplication を使用して
 /// デスクトップ画面をGPUメモリ上で効率的にキャプチャする
@@ -78,10 +71,6 @@ public:
     /// @brief 取得中のフレームを解放する
     /// AcquireFrame 成功後、次の AcquireFrame 前に必ず呼ぶこと
     void ReleaseFrame();
-
-    /// @brief 最後に取得したフレームのカーソル情報を返す
-    /// @return カーソル情報
-    CursorInfo GetCursorInfo() const;
 
     /// @brief Desktop Duplication を再初期化する
     /// ACCESS_LOST 等のエラー発生時に呼び出す
@@ -142,9 +131,6 @@ private:
     // テクスチャデスクリプタのキャッシュ（初回フレームで取得、以降再利用）
     D3D11_TEXTURE2D_DESC cached_desc_{};
     bool desc_cached_ = false;
-
-    // 最後に取得したフレーム情報（カーソル情報取得用）
-    DXGI_OUTDUPL_FRAME_INFO last_frame_info_{};
 
     // デバッグ・フォールバック関連
     bool use_fallback_ = false;                       // フォールバック（ダミーテクスチャ）モードフラグ

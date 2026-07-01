@@ -4,10 +4,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{StreamExt, SinkExt};
 
 mod ffi;
-mod screen_capture;
 mod input_control;
-mod network;
-mod session;
 
 // WebSocket接続キャンセル用のoneshot送信チャネル
 static WS_CANCEL_TX: Lazy<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
@@ -32,17 +29,12 @@ async fn start_host(
     let mut output_idx = 0;
     let mut w = 1920;
     let mut h = 1080;
-    let mut fps = 30;
-
     // プライマリディスプレイの情報を優先適用
     if let Some(primary) = displays.iter().find(|d| d.is_primary == 1) {
         adapter_idx = primary.adapter_index;
         output_idx = primary.output_index;
         w = primary.width as i32;
         h = primary.height as i32;
-        if primary.refresh_rate > 10.0 {
-            fps = primary.refresh_rate as i32;
-        }
     } else if let Some(first) = displays.first() {
         adapter_idx = first.adapter_index;
         output_idx = first.output_index;
@@ -50,9 +42,7 @@ async fn start_host(
         h = first.height as i32;
     }
 
-    // CPUコピーfallbackが発生するハイブリッドGPU環境では、60fpsを維持すると
-    // PCIe帯域とCPUコピーがボトルネックになりラグが大きくなるため、30fpsに制限する
-    fps = 60;
+    let fps = 60;
 
     // 3. WebSocket シグナリングクライアントタスクのセットアップ
     let (ws_tx, mut ws_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -225,16 +215,6 @@ async fn stop_host() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn connect_to_host(code: String) -> Result<String, String> {
-    session::connect_session(&code)
-}
-
-#[tauri::command]
-fn disconnect_session() -> Result<(), String> {
-    session::disconnect()
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -242,8 +222,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_host,
             stop_host,
-            connect_to_host,
-            disconnect_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

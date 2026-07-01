@@ -92,77 +92,8 @@ unsafe extern "C" fn on_local_candidate(candidate: *const c_char, mid: *const c_
     }
 }
 
-fn inject_click(button_name: &str, count: usize) -> Result<(), String> {
-    let button = crate::input_control::parse_button_name(button_name);
-    for _ in 0..count {
-        crate::input_control::inject_mouse_click(button, true)?;
-        crate::input_control::inject_mouse_click(button, false)?;
-    }
-    Ok(())
-}
-
 pub fn handle_remote_input(message: &str) {
-    let json = match serde_json::from_str::<serde_json::Value>(message) {
-        Ok(value) => value,
-        Err(error) => {
-            std::println!("[Rust Input] JSON parse failed: {}", error);
-            return;
-        }
-    };
-    if json["type"].as_str() != Some("input") {
-        return;
-    }
-
-    let action = json["action"].as_str().unwrap_or("");
-    let result = match action {
-        "mouse-move" => {
-            let nx = json["nx"].as_f64().unwrap_or(0.0);
-            let ny = json["ny"].as_f64().unwrap_or(0.0);
-            let width = crate::input_control::get_screen_width();
-            let height = crate::input_control::get_screen_height();
-            crate::input_control::inject_mouse_move(
-                (nx * width as f64) as i32,
-                (ny * height as f64) as i32,
-            )
-        }
-        "mouse-move-rel" => crate::input_control::inject_mouse_move_rel(
-            json["dx"].as_i64().unwrap_or(0) as i32,
-            json["dy"].as_i64().unwrap_or(0) as i32,
-        ),
-        "mouse-down" | "mouse-up" => crate::input_control::inject_mouse_click(
-            crate::input_control::parse_button_name(
-                json["button"].as_str().unwrap_or("left")),
-            action == "mouse-down",
-        ),
-        "mouse-click" => inject_click(
-            json["button"].as_str().unwrap_or("left"), 1),
-        "mouse-double-click" => inject_click(
-            json["button"].as_str().unwrap_or("left"), 2),
-        "mouse-scroll" => crate::input_control::inject_mouse_scroll(
-            json["deltaY"].as_f64().unwrap_or(0.0).round() as i32),
-        "key" => {
-            let key = json["key"].as_str().unwrap_or("");
-            match crate::input_control::key_name_to_vk(key) {
-                Some(vk) => crate::input_control::inject_key_event(
-                    vk, json["isDown"].as_bool().unwrap_or(false)),
-                None => Err(format!("Unsupported key: {}", key)),
-            }
-        }
-        "type-char" => {
-            match json["char"].as_str().and_then(|value| value.chars().next()) {
-                Some(character) => crate::input_control::inject_unicode_char(character),
-                None => Err("Missing character".to_string()),
-            }
-        }
-        _ => Err(format!("Unsupported action: {}", action)),
-    };
-
-    if let Err(error) = result {
-        std::println!("[Rust Input] {} failed: {}", action, error);
-        return;
-    }
-
-    std::println!("[Rust Input] action applied: {}", action);
+    crate::input_control::handle_remote_input(message);
 }
 
 // 3. データチャネル経由で制御コマンドメッセージを受信した時のコールバック

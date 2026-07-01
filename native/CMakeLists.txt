@@ -74,7 +74,6 @@ FetchContent_MakeAvailable(datachannel)
 add_library(yamanoha_core SHARED
     src/core.cpp
     src/gpu/d3d11_device.cpp
-    src/gpu/texture_utils.cpp
     src/capture/display_manager.cpp
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
@@ -95,7 +94,6 @@ endif()
 add_executable(capture_test
     test/capture_test.cpp
     src/gpu/d3d11_device.cpp
-    src/gpu/texture_utils.cpp
     src/capture/display_manager.cpp
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
@@ -110,7 +108,6 @@ endif()
 add_executable(encode_test
     test/encode_test.cpp
     src/gpu/d3d11_device.cpp
-    src/gpu/texture_utils.cpp
     src/capture/display_manager.cpp
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
@@ -126,7 +123,6 @@ endif()
 add_executable(webrtc_test
     test/webrtc_test.cpp
     src/gpu/d3d11_device.cpp
-    src/gpu/texture_utils.cpp
     src/capture/display_manager.cpp
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp

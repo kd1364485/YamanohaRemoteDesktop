@@ -37,7 +37,7 @@ let clientWs: WebSocket | null = null;
 // WebRTC関連
 let pc: RTCPeerConnection | null = null;
 let remoteStream: MediaStream | null = null;
-let currentCursor: { x: number; y: number } | null = null;
+// currentCursor removed - host-side compositing handles cursor
 // remoteDescriptionセット前に到着したICE candidateを一時保持するバッファ
 let pendingIceCandidates: RTCIceCandidateInit[] = [];
 // 入力/カーソル用DataChannel（P2P直送）。ホストが作成しondatachannelで受信する。
@@ -91,16 +91,7 @@ async function setupWebRTC(): Promise<void> {
     channel.onerror = (error) => {
       console.error("[client] input DataChannel error:", error);
     };
-    // ホストからのカーソル位置通知をDataChannelで受信
-    channel.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === "cursor") {
-          currentCursor = { x: msg.x, y: msg.y };
-          drawCursorOverlay();
-        }
-      } catch {}
-    };
+    // DataChannel message handling removed - cursor is composited host-side
   };
 
   // Trackイベント: リモートストリームを受信
@@ -526,11 +517,6 @@ function connectToHost(hostId: string): void {
         renderDisplaySwitcher();
         break;
 
-      case "cursor"://ホストからのカーソル位置通知
-        currentCursor = { x: msg.x, y: msg.y };
-        drawCursorOverlay();
-        break;
-
       case "webrtc-offer":
         handleWebRTCOffer(msg.sdp);
         break;
@@ -630,12 +616,10 @@ const TOUCH_EVENT_COOLDOWN_MS = 500;
 
 function setupRemoteCanvas(): void {
   const video = document.getElementById("remote-video") as HTMLVideoElement | null;
-  const canvas = document.getElementById("remote-canvas") as HTMLCanvasElement | null;
   const placeholder = document.getElementById("remote-placeholder");
   if (placeholder) placeholder.style.display = "none";
   if (video) {
     video.style.display = "block";
-    if (canvas) canvas.style.display = "block";
 
     video.onmousemove = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
@@ -898,67 +882,4 @@ function setupTouchControls(el: HTMLElement): void {
     dragCandidate = false;
     touchCount = 0;
   }, { passive: false });
-}
-
-// --- カーソルオーバーレイ描画 ---
-// canvas は video の上に重ねて配置。video の描画サイズに合わせて
-// カーソルを描画する。
-function drawCursorOverlay(): void {
-  const canvas = document.getElementById("remote-canvas") as HTMLCanvasElement | null;
-  const video = document.getElementById("remote-video") as HTMLVideoElement | null;
-  if (!canvas || !video || !currentCursor) return;
-
-  // video の実際の表示サイズに canvas を合わせる
-  const container = canvas.parentElement;
-  if (container) {
-    const containerRect = container.getBoundingClientRect();
-    canvas.width = containerRect.width;
-    canvas.height = containerRect.height;
-  }
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // video の object-contain 描画領域を計算
-  const videoAspect = video.videoWidth / video.videoHeight;
-  const containerAspect = canvas.width / canvas.height;
-  let renderW: number, renderH: number, offsetX: number, offsetY: number;
-  if (videoAspect > containerAspect) {
-    renderW = canvas.width;
-    renderH = canvas.width / videoAspect;
-    offsetX = 0;
-    offsetY = (canvas.height - renderH) / 2;
-  } else {
-    renderH = canvas.height;
-    renderW = canvas.height * videoAspect;
-    offsetX = (canvas.width - renderW) / 2;
-    offsetY = 0;
-  }
-
-  const cx = offsetX + currentCursor.x * renderW;
-  const cy = offsetY + currentCursor.y * renderH;
-  drawCursor(ctx, cx, cy, renderW);
-}
-
-function drawCursor(ctx: CanvasRenderingContext2D, x: number, y: number, renderWidth: number): void {
-  const s = Math.max(14, renderWidth / 60);
-  const pts: [number, number][] = [
-    [0, 0], [0, 1], [0.28, 0.75], [0.45, 1.15],
-    [0.6, 1.08], [0.42, 0.68], [0.7, 0.68],
-  ];
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(x + pts[0][0] * s, y + pts[0][1] * s);
-  for (let i = 1; i < pts.length; i++) {
-    ctx.lineTo(x + pts[i][0] * s, y + pts[i][1] * s);
-  }
-  ctx.closePath();
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "#000000";
-  ctx.lineWidth = Math.max(1.5, s / 12);
-  ctx.lineJoin = "round";
-  ctx.stroke();
-  ctx.fill();
-  ctx.restore();
 }

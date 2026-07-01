@@ -1,6 +1,7 @@
 #pragma once
 
 #include "capture/capture_engine.h"
+#include "capture/cursor_cpu_compositor.h"
 #include "capture/display_manager.h"
 #include "encoder/nvenc_encoder.h"
 #include "gpu/d3d11_device.h"
@@ -107,6 +108,8 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> force_key_frame_{true};
     bool prepared_ = false;
+
+    CursorCpuCompositor cursor_compositor_;
     int fps_ = 0;
     uint32_t current_bitrate_kbps_ = 0;
 };

@@ -181,7 +181,8 @@ bool FramePipeline::CreateTransferTextures(
     staging_description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     staging_description.SampleDesc.Count = 1;
     staging_description.Usage = D3D11_USAGE_STAGING;
-    staging_description.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging_description.CPUAccessFlags =
+        D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
 
     HRESULT result = capture_engine_->GetDevice()->CreateTexture2D(
         &staging_description, nullptr, &staging_texture_);
@@ -432,13 +433,21 @@ bool FramePipeline::CopyToEncodeTexture(
     capture_context->CopyResource(staging_texture_.Get(), source);
     D3D11_MAPPED_SUBRESOURCE mapped{};
     const HRESULT result = capture_context->Map(
-        staging_texture_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        staging_texture_.Get(), 0, D3D11_MAP_READ_WRITE, 0, &mapped);
     if (FAILED(result)) {
         std::printf(
             "[FramePipeline] staging texture map failed: 0x%08lX\n",
             result);
         return false;
     }
+
+    const auto& display = capture_engine_->GetDisplay();
+    cursor_compositor_.Composite(
+        static_cast<uint8_t*>(mapped.pData),
+        mapped.RowPitch,
+        capture_engine_->GetWidth(),
+        capture_engine_->GetHeight(),
+        display.bounds);
 
     encode_context->UpdateSubresource(
         destination, 0, nullptr, mapped.pData, mapped.RowPitch, 0);

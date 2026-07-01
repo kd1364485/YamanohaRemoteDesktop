@@ -92,23 +92,6 @@ unsafe extern "C" fn on_local_candidate(candidate: *const c_char, mid: *const c_
     }
 }
 
-fn send_cursor_position() {
-    let Some((x, y)) = crate::input_control::get_cursor_position_normalized() else {
-        return;
-    };
-    let message = serde_json::json!({
-        "type": "cursor",
-        "x": x,
-        "y": y
-    }).to_string();
-
-    if send_message(&message).is_err() {
-        if let Some(sender) = WS_SENDER.lock().unwrap().as_ref() {
-            let _ = sender.send(message);
-        }
-    }
-}
-
 fn inject_click(button_name: &str, count: usize) -> Result<(), String> {
     let button = crate::input_control::parse_button_name(button_name);
     for _ in 0..count {
@@ -179,11 +162,7 @@ pub fn handle_remote_input(message: &str) {
         return;
     }
 
-    if action == "mouse-move" || action == "mouse-move-rel" {
-        send_cursor_position();
-    } else {
-        std::println!("[Rust Input] action applied: {}", action);
-    }
+    std::println!("[Rust Input] action applied: {}", action);
 }
 
 // 3. データチャネル経由で制御コマンドメッセージを受信した時のコールバック
@@ -247,8 +226,6 @@ extern "C" {
         sdp_or_candidate: *const c_char,
         mid: *const c_char
     ) -> c_int;
-
-    fn yamanoha_send_message(message: *const c_char) -> c_int;
 }
 
 #[repr(C)]
@@ -383,11 +360,3 @@ pub fn process_signaling(
     Ok(())
 }
 
-pub fn send_message(message: &str) -> Result<(), String> {
-    let c_message = CString::new(message).map_err(|e| e.to_string())?;
-    let res = unsafe { yamanoha_send_message(c_message.as_ptr()) };
-    if res == 0 {
-        return Err("Failed to send message over data channel".to_string());
-    }
-    Ok(())
-}

@@ -40,26 +40,6 @@ pub fn get_screen_height() -> i32 {
     unsafe { GetSystemMetrics(SM_CYSCREEN) }
 }
 
-pub fn get_cursor_position_normalized() -> Option<(f64, f64)> {
-    unsafe {
-        let mut point: Point = std::mem::zeroed();
-        if GetCursorPos(&mut point) == 0 {
-            return None;
-        }
-
-        let width = get_screen_width();
-        let height = get_screen_height();
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-
-        Some((
-            (point.x as f64 / width as f64).clamp(0.0, 1.0),
-            (point.y as f64 / height as f64).clamp(0.0, 1.0),
-        ))
-    }
-}
-
 /// @brief マウスカーソルを物理座標 (x, y) へ移動する
 pub fn inject_mouse_move(x: i32, y: i32) -> Result<(), String> {
     unsafe {

@@ -78,6 +78,7 @@ add_library(yamanoha_core SHARED
     src/capture/display_manager.cpp
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
+    src/capture/cursor_cpu_compositor.cpp
     src/encoder/nvenc_encoder.cpp
     src/pipeline/adaptive_bitrate_controller.cpp
     src/pipeline/frame_pipeline.cpp

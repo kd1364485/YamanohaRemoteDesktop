@@ -52,7 +52,7 @@ async fn start_host(
 
     // CPUコピーfallbackが発生するハイブリッドGPU環境では、60fpsを維持すると
     // PCIe帯域とCPUコピーがボトルネックになりラグが大きくなるため、30fpsに制限する
-    fps = 30;
+    fps = 60;
 
     // 3. WebSocket シグナリングクライアントタスクのセットアップ
     let (ws_tx, mut ws_rx) = tokio::sync::mpsc::unbounded_channel::<String>();

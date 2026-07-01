@@ -12,6 +12,7 @@
 #include <wrl/client.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -93,6 +94,7 @@ private:
     std::vector<ID3D11Texture2D*> free_encode_textures_;
 
     mutable std::mutex submitted_mutex_;
+    std::condition_variable submitted_cv_;
     std::unordered_map<int, SubmittedFrame> submitted_frames_;
 
     BlockingQueue<EncodedFrame> encoded_frames_;

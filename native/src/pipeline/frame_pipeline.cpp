@@ -94,6 +94,7 @@ void FramePipeline::Stop() {
         prepared_ || capture_engine_ || encoder_ || streamer_;
 
     running_.store(false, std::memory_order_release);
+    submitted_cv_.notify_all();
     encoded_frames_.Stop();
 
     if (capture_thread_.joinable()) {
@@ -327,6 +328,9 @@ void FramePipeline::CaptureLoop() {
                     SubmittedFrame{encode_texture, timestamp_us});
             }
         }
+        if (frame_id >= 0) {
+            submitted_cv_.notify_one();
+        }
 
         if (frame_id < 0) {
             ReturnEncodeTexture(encode_texture);
@@ -348,6 +352,17 @@ void FramePipeline::CaptureLoop() {
 
 void FramePipeline::EncoderLoop() {
     while (running_.load(std::memory_order_acquire)) {
+        {
+            std::unique_lock<std::mutex> lock(submitted_mutex_);
+            submitted_cv_.wait(lock, [this] {
+                return !running_.load(std::memory_order_acquire) ||
+                       !submitted_frames_.empty();
+            });
+            if (!running_.load(std::memory_order_acquire)) {
+                break;
+            }
+        }
+
         std::vector<uint8_t> bitstream;
         ID3D11Texture2D* completed_texture = nullptr;
         int completed_frame_id = 0;

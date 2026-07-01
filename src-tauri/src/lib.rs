@@ -189,6 +189,9 @@ async fn start_host(
                                 std::println!("[Rust WS] Remote ICE Candidate を受信しました。C++へ転送します: {}", candidate_str);
                                 let _ = ffi::process_signaling("candidate", candidate_str, mid_str);
                             }
+                            "input" => {
+                                ffi::handle_remote_input(&msg);
+                            }
                             _ => {}
                         }
                     }

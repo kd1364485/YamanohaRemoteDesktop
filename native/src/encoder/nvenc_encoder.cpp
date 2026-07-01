@@ -645,70 +645,41 @@ bool NvencEncoder::Flush(std::vector<uint8_t>& out_bitstream) {
 
     out_bitstream.clear();
 
-    // 未完了ジョブがあれば完了まで待つ
-    {
+    // Bフレームなしの低遅延設定ではNVENC内部の遅延フレームはない。
+    // 未完了ジョブだけを有限時間で回収し、停止処理を無限にブロックしない。
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(jobs_mutex_);
+            if (pending_jobs_.empty()) {
+                return true;
+            }
+        }
+
         std::vector<uint8_t> temp;
         ID3D11Texture2D* tex = nullptr;
         int id = 0;
-        while (GetCompletedFrame(temp, &tex, &id, UINT64_MAX)) {
-            // フラッシュ前に未処理のビットストリームを破棄
-        }
-    }
-
-    // 非同期リソースを一時取得
-    NV_ENC_OUTPUT_PTR output_buffer = nullptr;
-    HANDLE event = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        if (free_output_buffers_.empty() || free_events_.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            std::printf(
+                "[NvencEncoder] flush deadline reached; pending jobs will be "
+                "released during shutdown\n");
+            std::fflush(stdout);
             return false;
         }
-        output_buffer = free_output_buffers_.back();
-        free_output_buffers_.pop_back();
-        event = free_events_.back();
-        free_events_.pop_back();
-        ResetEvent(event);
-    }
 
-    // フラッシュ用の空入力で nvEncEncodePicture を呼び出す
-    NV_ENC_PIC_PARAMS pic_params{};
-    pic_params.version = NV_ENC_PIC_PARAMS_VER;
-    pic_params.inputBuffer = nullptr;
-    pic_params.outputBitstream = output_buffer;
-    pic_params.encodePicFlags = NV_ENC_PIC_FLAG_EOS; // End of Stream
-    pic_params.completionEvent = event;
-
-    NVENCSTATUS status = nv_api_.nvEncEncodePicture(encoder_handle_, &pic_params);
-    if (status != NV_ENC_SUCCESS) {
-        LOG_NVENC_ERR("nvEncEncodePicture (EOS)", status);
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        free_output_buffers_.push_back(output_buffer);
-        free_events_.push_back(event);
-        return false;
-    }
-
-    WaitForSingleObject(event, INFINITE);
-
-    // ロックしてフラッシュされたデータを取り出す
-    NV_ENC_LOCK_BITSTREAM lock_params{};
-    lock_params.version = NV_ENC_LOCK_BITSTREAM_VER;
-    lock_params.outputBitstream = output_buffer;
-    lock_params.doNotWait = 1;
-
-    status = nv_api_.nvEncLockBitstream(encoder_handle_, &lock_params);
-    if (status == NV_ENC_SUCCESS) {
-        if (lock_params.bitstreamSizeInBytes > 0) {
-            auto* data = static_cast<uint8_t*>(lock_params.bitstreamBufferPtr);
-            out_bitstream.assign(data, data + lock_params.bitstreamSizeInBytes);
+        const uint64_t remaining_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                deadline - now).count());
+        if (!GetCompletedFrame(temp, &tex, &id, remaining_us)) {
+            std::printf(
+                "[NvencEncoder] flush timed out; pending jobs will be "
+                "released during shutdown\n");
+            std::fflush(stdout);
+            return false;
         }
-        nv_api_.nvEncUnlockBitstream(encoder_handle_, output_buffer);
     }
-
-    std::lock_guard<std::mutex> lock(jobs_mutex_);
-    free_output_buffers_.push_back(output_buffer);
-    free_events_.push_back(event);
-
-    return true;
 }
 
 // ---------------------------------------------------------------------------

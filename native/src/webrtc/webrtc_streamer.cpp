@@ -16,7 +16,7 @@ constexpr uint8_t kH264PayloadType = 96;
 constexpr size_t kRtpMtu = 1200;
 constexpr size_t kNackHistoryPackets = 2048;
 constexpr char kVideoCname[] = "video-stream";
-constexpr char kControlChannelLabel[] = "control";
+constexpr char kInputChannelLabel[] = "input";
 
 } // namespace
 
@@ -268,7 +268,8 @@ private:
 
         peer_connection->onDataChannel(
             [this](std::shared_ptr<rtc::DataChannel> data_channel) {
-                if (data_channel->label() == kControlChannelLabel) {
+                if (data_channel->label() == kInputChannelLabel ||
+                    data_channel->label() == "control") {
                     ConfigureControlChannel(data_channel);
                     std::lock_guard<std::mutex> lock(transport_mutex_);
                     data_channel_ = std::move(data_channel);
@@ -328,7 +329,7 @@ private:
     void CreateControlChannel(
         const std::shared_ptr<rtc::PeerConnection>& peer_connection) {
         auto data_channel =
-            peer_connection->createDataChannel(kControlChannelLabel);
+            peer_connection->createDataChannel(kInputChannelLabel);
         ConfigureControlChannel(data_channel);
 
         std::lock_guard<std::mutex> lock(transport_mutex_);

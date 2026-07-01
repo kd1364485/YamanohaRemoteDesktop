@@ -93,6 +93,11 @@ void FramePipeline::Stop() {
     const bool had_resources =
         prepared_ || capture_engine_ || encoder_ || streamer_;
 
+    if (had_resources) {
+        std::printf("[FramePipeline] stopping worker threads...\n");
+        std::fflush(stdout);
+    }
+
     running_.store(false, std::memory_order_release);
     submitted_cv_.notify_all();
     encoded_frames_.Stop();
@@ -112,8 +117,11 @@ void FramePipeline::Stop() {
         encoder_->Flush(ignored);
     }
 
-    ClearSubmittedFrames();
     encoded_frames_.Clear();
+    if (had_resources) {
+        std::printf("[FramePipeline] releasing resources...\n");
+        std::fflush(stdout);
+    }
     ReleaseResources();
 
     if (had_resources) {
@@ -256,6 +264,7 @@ void FramePipeline::ReleaseResources() {
         encoder_.reset();
     }
 
+    ClearSubmittedFrames();
     staging_texture_.Reset();
     {
         std::lock_guard<std::mutex> lock(texture_pool_mutex_);

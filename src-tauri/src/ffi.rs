@@ -92,82 +92,105 @@ unsafe extern "C" fn on_local_candidate(candidate: *const c_char, mid: *const c_
     }
 }
 
+fn send_cursor_position() {
+    let Some((x, y)) = crate::input_control::get_cursor_position_normalized() else {
+        return;
+    };
+    let message = serde_json::json!({
+        "type": "cursor",
+        "x": x,
+        "y": y
+    }).to_string();
+
+    if send_message(&message).is_err() {
+        if let Some(sender) = WS_SENDER.lock().unwrap().as_ref() {
+            let _ = sender.send(message);
+        }
+    }
+}
+
+fn inject_click(button_name: &str, count: usize) -> Result<(), String> {
+    let button = crate::input_control::parse_button_name(button_name);
+    for _ in 0..count {
+        crate::input_control::inject_mouse_click(button, true)?;
+        crate::input_control::inject_mouse_click(button, false)?;
+    }
+    Ok(())
+}
+
+pub fn handle_remote_input(message: &str) {
+    let json = match serde_json::from_str::<serde_json::Value>(message) {
+        Ok(value) => value,
+        Err(error) => {
+            std::println!("[Rust Input] JSON parse failed: {}", error);
+            return;
+        }
+    };
+    if json["type"].as_str() != Some("input") {
+        return;
+    }
+
+    let action = json["action"].as_str().unwrap_or("");
+    let result = match action {
+        "mouse-move" => {
+            let nx = json["nx"].as_f64().unwrap_or(0.0);
+            let ny = json["ny"].as_f64().unwrap_or(0.0);
+            let width = crate::input_control::get_screen_width();
+            let height = crate::input_control::get_screen_height();
+            crate::input_control::inject_mouse_move(
+                (nx * width as f64) as i32,
+                (ny * height as f64) as i32,
+            )
+        }
+        "mouse-move-rel" => crate::input_control::inject_mouse_move_rel(
+            json["dx"].as_i64().unwrap_or(0) as i32,
+            json["dy"].as_i64().unwrap_or(0) as i32,
+        ),
+        "mouse-down" | "mouse-up" => crate::input_control::inject_mouse_click(
+            crate::input_control::parse_button_name(
+                json["button"].as_str().unwrap_or("left")),
+            action == "mouse-down",
+        ),
+        "mouse-click" => inject_click(
+            json["button"].as_str().unwrap_or("left"), 1),
+        "mouse-double-click" => inject_click(
+            json["button"].as_str().unwrap_or("left"), 2),
+        "mouse-scroll" => crate::input_control::inject_mouse_scroll(
+            json["deltaY"].as_f64().unwrap_or(0.0).round() as i32),
+        "key" => {
+            let key = json["key"].as_str().unwrap_or("");
+            match crate::input_control::key_name_to_vk(key) {
+                Some(vk) => crate::input_control::inject_key_event(
+                    vk, json["isDown"].as_bool().unwrap_or(false)),
+                None => Err(format!("Unsupported key: {}", key)),
+            }
+        }
+        "type-char" => {
+            match json["char"].as_str().and_then(|value| value.chars().next()) {
+                Some(character) => crate::input_control::inject_unicode_char(character),
+                None => Err("Missing character".to_string()),
+            }
+        }
+        _ => Err(format!("Unsupported action: {}", action)),
+    };
+
+    if let Err(error) = result {
+        std::println!("[Rust Input] {} failed: {}", action, error);
+        return;
+    }
+
+    if action == "mouse-move" || action == "mouse-move-rel" {
+        send_cursor_position();
+    } else {
+        std::println!("[Rust Input] action applied: {}", action);
+    }
+}
+
 // 3. データチャネル経由で制御コマンドメッセージを受信した時のコールバック
 unsafe extern "C" fn on_remote_message(message: *const c_char) {
     if message.is_null() { return; }
     let msg_str = CStr::from_ptr(message).to_string_lossy().into_owned();
-
-    std::println!("[Rust FFI] DataChannel 受信メッセージ: {}", msg_str);
-
-    // 受信した JSON コマンドを解析し、フロントエンドを介さずに直接 OS に入力をシミュレートする (超低遅延)
-    if let Ok(j) = serde_json::from_str::<serde_json::Value>(&msg_str) {
-        let msg_type = j["type"].as_str().unwrap_or("");
-        match msg_type {
-            // クライアント側からの統一入力形式: {type: "input", action: "...", ...}
-            "input" => {
-                let action = j["action"].as_str().unwrap_or("");
-                match action {
-                    "mouse-move" => {
-                        // クライアントは 0..1 の正規化座標を送る
-                        let nx = j["nx"].as_f64().unwrap_or(0.0);
-                        let ny = j["ny"].as_f64().unwrap_or(0.0);
-                        let screen_width = crate::input_control::get_screen_width();
-                        let screen_height = crate::input_control::get_screen_height();
-                        let x = (nx * screen_width as f64) as i32;
-                        let y = (ny * screen_height as f64) as i32;
-                        let _ = crate::input_control::inject_mouse_move(x, y);
-                    }
-                    "mouse-move-rel" => {
-                        let dx = j["dx"].as_i64().unwrap_or(0) as i32;
-                        let dy = j["dy"].as_i64().unwrap_or(0) as i32;
-                        let _ = crate::input_control::inject_mouse_move_rel(dx, dy);
-                    }
-                    "mouse-down" | "mouse-up" => {
-                        let is_down = action == "mouse-down";
-                        let button = j["button"].as_str().unwrap_or("left");
-                        let _ = crate::input_control::inject_mouse_click(
-                            crate::input_control::parse_button_name(button), is_down);
-                    }
-                    "mouse-scroll" => {
-                        let delta_y = j["deltaY"].as_i64().unwrap_or(0) as i32;
-                        let _ = crate::input_control::inject_mouse_scroll(delta_y);
-                    }
-                    "key" => {
-                        let key = j["key"].as_str().unwrap_or("");
-                        let is_down = j["isDown"].as_bool().unwrap_or(false);
-                        if let Some(vk) = crate::input_control::key_name_to_vk(key) {
-                            let _ = crate::input_control::inject_key_event(vk, is_down);
-                        }
-                    }
-                    "type-char" => {
-                        let ch = j["char"].as_str().unwrap_or("");
-                        if let Some(c) = ch.chars().next() {
-                            let _ = crate::input_control::inject_unicode_char(c);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // 旧形式（互換性維持）
-            "mousemove" => {
-                let x = j["x"].as_f64().unwrap_or(0.0) as i32;
-                let y = j["y"].as_f64().unwrap_or(0.0) as i32;
-                let _ = crate::input_control::inject_mouse_move(x, y);
-            }
-            "mousedown" | "mouseup" => {
-                // button: 0=左, 1=中, 2=右 (nut-jsやDOM標準に準拠)
-                let button = j["button"].as_u64().unwrap_or(0) as u8;
-                let is_down = msg_type == "mousedown";
-                let _ = crate::input_control::inject_mouse_click(button, is_down);
-            }
-            "keydown" | "keyup" => {
-                let key_code = j["keyCode"].as_u64().unwrap_or(0) as u32;
-                let is_down = msg_type == "keydown";
-                let _ = crate::input_control::inject_key_event(key_code, is_down);
-            }
-            _ => {}
-        }
-    }
+    handle_remote_input(&msg_str);
 
     // Tauriのフロントエンドへイベント通知
     if let Some(app) = TAURI_APP.lock().unwrap().as_ref() {

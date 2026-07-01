@@ -75,13 +75,24 @@ async function setupWebRTC(): Promise<void> {
   });
   console.log("[client] RTCPeerConnection created");
 
-  // ホストが作成したDataChannel(input)を受信
+  // ホストが作成した入力DataChannelを受信。controlは旧ネイティブ版との互換用。
   pc.ondatachannel = (event) => {
-    if (event.channel.label !== "control") return;
-    console.log("[client] input DataChannel received");
-    inputChannel = event.channel;
+    if (event.channel.label !== "input" && event.channel.label !== "control") return;
+    const channel = event.channel;
+    console.log(`[client] input DataChannel received: ${channel.label}`);
+    inputChannel = channel;
+    channel.onopen = () => {
+      console.log(`[client] input DataChannel open: ${channel.label}`);
+    };
+    channel.onclose = () => {
+      console.log(`[client] input DataChannel closed: ${channel.label}`);
+      if (inputChannel === channel) inputChannel = null;
+    };
+    channel.onerror = (error) => {
+      console.error("[client] input DataChannel error:", error);
+    };
     // ホストからのカーソル位置通知をDataChannelで受信
-    inputChannel.onmessage = (e) => {
+    channel.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === "cursor") {

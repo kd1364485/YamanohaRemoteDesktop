@@ -5,12 +5,61 @@
 #include "nvenc_encoder.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <utility>
 
 namespace yamanoha {
 
-// エラーロギングマクロ
+namespace {
+
+uint64_t NowMicroseconds() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+GUID SelectPresetGuid(uint32_t preset) {
+    static const GUID presets[] = {
+        NV_ENC_PRESET_P1_GUID,
+        NV_ENC_PRESET_P2_GUID,
+        NV_ENC_PRESET_P3_GUID,
+        NV_ENC_PRESET_P4_GUID,
+        NV_ENC_PRESET_P5_GUID,
+        NV_ENC_PRESET_P6_GUID,
+        NV_ENC_PRESET_P7_GUID,
+    };
+    const uint32_t index = (std::clamp)(preset, 1u, 7u) - 1;
+    return presets[index];
+}
+
+NV_ENC_TUNING_INFO SelectTuningInfo(bool zero_latency) {
+    return zero_latency
+        ? NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY
+        : NV_ENC_TUNING_INFO_LOW_LATENCY;
+}
+
+void ApplyRateControl(
+    NV_ENC_CONFIG& encode_config,
+    const EncoderConfig& config) {
+    const uint32_t fps = (std::max)(config.fps, 1u);
+    encode_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
+    encode_config.rcParams.rateControlMode = config.use_cbr
+        ? NV_ENC_PARAMS_RC_CBR
+        : NV_ENC_PARAMS_RC_VBR;
+    encode_config.rcParams.averageBitRate = config.bitrate_kbps * 1000;
+    encode_config.rcParams.maxBitRate =
+        (std::max)(config.max_bitrate_kbps, config.bitrate_kbps) * 1000;
+    encode_config.rcParams.vbvBufferSize =
+        encode_config.rcParams.averageBitRate / fps;
+    encode_config.rcParams.vbvInitialDelay =
+        encode_config.rcParams.vbvBufferSize;
+    encode_config.rcParams.lowDelayKeyFrameScale =
+        config.zero_latency ? 1 : 0;
+}
+
+} // namespace
+
 #define LOG_NVENC_ERR(msg, status) \
     std::printf("[NvencEncoder] " msg " 失敗: エラーコード=%d\n", static_cast<int>(status))
 
@@ -63,6 +112,57 @@ bool NvencEncoder::LoadNvencApi() {
     return true;
 }
 
+bool NvencEncoder::BuildSessionConfiguration(
+    const EncoderConfig& config,
+    NV_ENC_CONFIG& encode_config,
+    NV_ENC_INITIALIZE_PARAMS& initialize_params) {
+    const GUID encode_guid = NV_ENC_CODEC_H264_GUID;
+    const GUID preset_guid = SelectPresetGuid(config.preset);
+    const NV_ENC_TUNING_INFO tuning_info =
+        SelectTuningInfo(config.zero_latency);
+
+    NV_ENC_PRESET_CONFIG preset_config{};
+    preset_config.version = NV_ENC_PRESET_CONFIG_VER;
+    preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
+    const NVENCSTATUS status = nv_api_.nvEncGetEncodePresetConfigEx(
+        encoder_handle_,
+        encode_guid,
+        preset_guid,
+        tuning_info,
+        &preset_config);
+    if (status != NV_ENC_SUCCESS) {
+        LOG_NVENC_ERR("nvEncGetEncodePresetConfigEx", status);
+        return false;
+    }
+
+    encode_config = preset_config.presetCfg;
+    encode_config.gopLength = config.gop_size;
+    encode_config.frameIntervalP = 1;
+    ApplyRateControl(encode_config, config);
+
+    auto& h264 = encode_config.encodeCodecConfig.h264Config;
+    h264.idrPeriod = config.gop_size;
+    h264.repeatSPSPPS = 1;
+    h264.sliceMode = 0;
+    h264.sliceModeData = 0;
+
+    initialize_params = {};
+    initialize_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
+    initialize_params.encodeGUID = encode_guid;
+    initialize_params.presetGUID = preset_guid;
+    initialize_params.tuningInfo = tuning_info;
+    initialize_params.encodeWidth = config.width;
+    initialize_params.encodeHeight = config.height;
+    initialize_params.darWidth = config.width;
+    initialize_params.darHeight = config.height;
+    initialize_params.frameRateNum = (std::max)(config.fps, 1u);
+    initialize_params.frameRateDen = 1;
+    initialize_params.enablePTD = 1;
+    initialize_params.enableEncodeAsync = 1;
+    initialize_params.encodeConfig = &encode_config;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // エンコーダの初期化
 // ---------------------------------------------------------------------------
@@ -105,87 +205,22 @@ bool NvencEncoder::Initialize(ID3D11Device* device, const EncoderConfig& config)
         return false;
     }
 
-    // 2. プリセットとチューニングの GUID を設定
-    GUID encode_guid = NV_ENC_CODEC_H264_GUID;
-    
-    // プリセットの選択 (P1〜P7)
-    GUID preset_guid = NV_ENC_PRESET_P1_GUID; // デフォルト (最高速)
-    if (config.preset >= 1 && config.preset <= 7) {
-        static const GUID presets[] = {
-            NV_ENC_PRESET_P1_GUID, NV_ENC_PRESET_P2_GUID, NV_ENC_PRESET_P3_GUID,
-            NV_ENC_PRESET_P4_GUID, NV_ENC_PRESET_P5_GUID, NV_ENC_PRESET_P6_GUID,
-            NV_ENC_PRESET_P7_GUID
-        };
-        preset_guid = presets[config.preset - 1];
-    }
-
-    // 超低遅延チューニングの指定
-    NV_ENC_TUNING_INFO tuning_info = config.zero_latency ? NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY : NV_ENC_TUNING_INFO_LOW_LATENCY;
-
-    // 3. プリセット設定の取得
-    NV_ENC_PRESET_CONFIG preset_config{};
-    preset_config.version = NV_ENC_PRESET_CONFIG_VER;
-    preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
-
-    status = nv_api_.nvEncGetEncodePresetConfigEx(
-        encoder_handle_, encode_guid, preset_guid, tuning_info, &preset_config);
-    if (status != NV_ENC_SUCCESS) {
-        LOG_NVENC_ERR("nvEncGetEncodePresetConfigEx", status);
+    // セッション設定を一箇所で組み立てる。再設定時も同じ値を基準にする。
+    NV_ENC_CONFIG encode_config{};
+    NV_ENC_INITIALIZE_PARAMS init_params{};
+    if (!BuildSessionConfiguration(config, encode_config, init_params)) {
         return false;
     }
-
-    // 4. カスタムパラメータの設定
-    NV_ENC_CONFIG encode_config = preset_config.presetCfg;
-    
-    // GOP サイズ（キーフレーム間隔）
-    encode_config.gopLength = config.gop_size;
-    encode_config.frameIntervalP = 1; // Bフレームを使用しない (I/Pフレームのみ)
-    
-    // レート制御
-    encode_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
-    if (config.use_cbr) {
-        encode_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-    } else {
-        encode_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
-    }
-    encode_config.rcParams.averageBitRate = config.bitrate_kbps * 1000;
-    encode_config.rcParams.maxBitRate = config.max_bitrate_kbps * 1000;
-    encode_config.rcParams.vbvBufferSize = encode_config.rcParams.averageBitRate / (config.fps > 0 ? config.fps : 30); // 1フレーム分のバッファ
-    encode_config.rcParams.vbvInitialDelay = encode_config.rcParams.vbvBufferSize;
-
-    if (config.zero_latency) {
-        encode_config.rcParams.lowDelayKeyFrameScale = 1;
-    }
-
-    // コーデック固有設定 (H.264)
-    encode_config.encodeCodecConfig.h264Config.idrPeriod = config.gop_size;
-    encode_config.encodeCodecConfig.h264Config.repeatSPSPPS = 1; // 毎キーフレームにSPS/PPSを付与
-    encode_config.encodeCodecConfig.h264Config.sliceMode = 0;
-    encode_config.encodeCodecConfig.h264Config.sliceModeData = 0;
-
-    // 5. エンコーダの初期化パラメータ設定
-    NV_ENC_INITIALIZE_PARAMS init_params{};
-    init_params.version = NV_ENC_INITIALIZE_PARAMS_VER;
-    init_params.encodeGUID = encode_guid;
-    init_params.presetGUID = preset_guid;
-    init_params.tuningInfo = tuning_info;
-    init_params.encodeWidth = config.width;
-    init_params.encodeHeight = config.height;
-    init_params.darWidth = config.width;
-    init_params.darHeight = config.height;
-    init_params.frameRateNum = config.fps;
-    init_params.frameRateDen = 1;
-    init_params.enablePTD = 1; // ピクチャタイプの決定をSDKに任せる
-    init_params.reportSliceOffsets = 0;
-    init_params.enableSubFrameWrite = 0;
-    init_params.enableEncodeAsync = 1; // 非同期エンコードを有効化
-    init_params.encodeConfig = &encode_config;
 
     status = nv_api_.nvEncInitializeEncoder(encoder_handle_, &init_params);
     if (status != NV_ENC_SUCCESS) {
         LOG_NVENC_ERR("nvEncInitializeEncoder", status);
         return false;
     }
+
+    active_encode_config_ = encode_config;
+    active_initialize_params_ = init_params;
+    active_initialize_params_.encodeConfig = &active_encode_config_;
 
     // 6. 非同期エンコード用リソースプールの作成
     if (!CreateAsyncResources()) {
@@ -224,6 +259,20 @@ bool NvencEncoder::CreateAsyncResources() {
             return false;
         }
 
+        NV_ENC_EVENT_PARAMS event_params{};
+        event_params.version = NV_ENC_EVENT_PARAMS_VER;
+        event_params.completionEvent = event;
+        status = nv_api_.nvEncRegisterAsyncEvent(
+            encoder_handle_, &event_params);
+        if (status != NV_ENC_SUCCESS) {
+            LOG_NVENC_ERR("nvEncRegisterAsyncEvent", status);
+            CloseHandle(event);
+            nv_api_.nvEncDestroyBitstreamBuffer(
+                encoder_handle_, bitstream_params.bitstreamBuffer);
+            ReleaseAsyncResources();
+            return false;
+        }
+
         free_output_buffers_.push_back(bitstream_params.bitstreamBuffer);
         free_events_.push_back(event);
     }
@@ -236,10 +285,30 @@ bool NvencEncoder::CreateAsyncResources() {
 // 非同期エンコード用リソースプールの解放
 // ---------------------------------------------------------------------------
 void NvencEncoder::ReleaseAsyncResources() {
-    // 未完了ジョブがあればクリア
+    std::deque<AsyncJob> pending_jobs;
     {
         std::lock_guard<std::mutex> lock(jobs_mutex_);
-        pending_jobs_.clear();
+        pending_jobs.swap(pending_jobs_);
+    }
+
+    for (auto& job : pending_jobs) {
+        if (job.mapped_resource && encoder_handle_) {
+            nv_api_.nvEncUnmapInputResource(
+                encoder_handle_, job.mapped_resource);
+        }
+        if (job.completion_event && encoder_handle_) {
+            NV_ENC_EVENT_PARAMS params{};
+            params.version = NV_ENC_EVENT_PARAMS_VER;
+            params.completionEvent = job.completion_event;
+            nv_api_.nvEncUnregisterAsyncEvent(encoder_handle_, &params);
+        }
+        if (job.completion_event) {
+            CloseHandle(job.completion_event);
+        }
+        if (job.output_buffer && encoder_handle_) {
+            nv_api_.nvEncDestroyBitstreamBuffer(
+                encoder_handle_, job.output_buffer);
+        }
     }
 
     for (auto buffer : free_output_buffers_) {
@@ -250,6 +319,12 @@ void NvencEncoder::ReleaseAsyncResources() {
     free_output_buffers_.clear();
 
     for (auto event : free_events_) {
+        if (event && encoder_handle_) {
+            NV_ENC_EVENT_PARAMS params{};
+            params.version = NV_ENC_EVENT_PARAMS_VER;
+            params.completionEvent = event;
+            nv_api_.nvEncUnregisterAsyncEvent(encoder_handle_, &params);
+        }
         if (event) {
             CloseHandle(event);
         }
@@ -312,6 +387,7 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
     }
 
     std::lock_guard<std::mutex> lock(jobs_mutex_);
+    std::lock_guard<std::mutex> api_lock(api_mutex_);
 
     if (free_output_buffers_.empty() || free_events_.empty()) {
         std::printf("[NvencEncoder] 非同期リソースプールが枯渇しました\n");
@@ -388,6 +464,7 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
     job.mapped_resource = map_params.mappedResource;
     job.output_buffer = output_buffer;
     job.completion_event = completion_event;
+    job.submitted_time_us = NowMicroseconds();
     pending_jobs_.push_back(job);
 
     return frame_id;
@@ -404,12 +481,14 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
 
     // 先頭ジョブを取得
     AsyncJob job{};
+    size_t pending_count = 0;
     {
         std::lock_guard<std::mutex> lock(jobs_mutex_);
         if (pending_jobs_.empty()) {
             return false;
         }
         job = pending_jobs_.front();
+        pending_count = pending_jobs_.size();
     }
 
     // ロックを解除してイベント待機（SubmitFrameをブロックしない）
@@ -422,12 +501,17 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
 
     DWORD result = WaitForSingleObject(job.completion_event, wait_ms);
     if (result != WAIT_OBJECT_0) {
-        // タイムアウト時はデバッグログを出力
         if (result == WAIT_TIMEOUT) {
-            static int timeout_log_count = 0;
-            if (++timeout_log_count % 100 == 0) {
-                std::printf("[NvencEncoder] GetCompletedFrame timeout (frame_id=%d, pending_jobs=%zu)\n",
-                            job.frame_id, pending_jobs_.size());
+            const uint64_t elapsed_us =
+                NowMicroseconds() - job.submitted_time_us;
+            static int stall_log_count = 0;
+            if (elapsed_us > 100000 && ++stall_log_count % 30 == 0) {
+                std::printf(
+                    "[NvencEncoder] completion stall "
+                    "(frame_id=%d, pending_jobs=%zu, elapsed_ms=%llu)\n",
+                    job.frame_id,
+                    pending_count,
+                    static_cast<unsigned long long>(elapsed_us / 1000));
                 std::fflush(stdout);
             }
         } else {
@@ -447,31 +531,44 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
         pending_jobs_.pop_front();
     }
 
-    // ロックは完了を待たずに行う（イベント済みなので即座に成功するはず）
-    NV_ENC_LOCK_BITSTREAM lock_params{};
-    lock_params.version = NV_ENC_LOCK_BITSTREAM_VER;
-    lock_params.outputBitstream = job.output_buffer;
-    lock_params.doNotWait = 1;
+    bool bitstream_locked = false;
+    {
+        std::lock_guard<std::mutex> api_lock(api_mutex_);
+        NV_ENC_LOCK_BITSTREAM lock_params{};
+        lock_params.version = NV_ENC_LOCK_BITSTREAM_VER;
+        lock_params.outputBitstream = job.output_buffer;
+        lock_params.doNotWait = 1;
 
-    NVENCSTATUS status = nv_api_.nvEncLockBitstream(encoder_handle_, &lock_params);
-    if (status != NV_ENC_SUCCESS) {
-        LOG_NVENC_ERR("nvEncLockBitstream", status);
-        nv_api_.nvEncUnmapInputResource(encoder_handle_, job.mapped_resource);
+        const NVENCSTATUS status =
+            nv_api_.nvEncLockBitstream(encoder_handle_, &lock_params);
+        if (status != NV_ENC_SUCCESS) {
+            LOG_NVENC_ERR("nvEncLockBitstream", status);
+            nv_api_.nvEncUnmapInputResource(
+                encoder_handle_, job.mapped_resource);
+        } else {
+            bitstream_locked = true;
+            if (lock_params.bitstreamSizeInBytes > 0) {
+                auto* data =
+                    static_cast<uint8_t*>(lock_params.bitstreamBufferPtr);
+                out_bitstream.assign(
+                    data, data + lock_params.bitstreamSizeInBytes);
+            } else {
+                out_bitstream.clear();
+            }
+
+            nv_api_.nvEncUnlockBitstream(
+                encoder_handle_, job.output_buffer);
+            nv_api_.nvEncUnmapInputResource(
+                encoder_handle_, job.mapped_resource);
+        }
+    }
+
+    if (!bitstream_locked) {
         std::lock_guard<std::mutex> lock(jobs_mutex_);
         free_output_buffers_.push_back(job.output_buffer);
         free_events_.push_back(job.completion_event);
         return false;
     }
-
-    if (lock_params.bitstreamSizeInBytes > 0) {
-        auto* data = static_cast<uint8_t*>(lock_params.bitstreamBufferPtr);
-        out_bitstream.assign(data, data + lock_params.bitstreamSizeInBytes);
-    } else {
-        out_bitstream.clear();
-    }
-
-    nv_api_.nvEncUnlockBitstream(encoder_handle_, job.output_buffer);
-    nv_api_.nvEncUnmapInputResource(encoder_handle_, job.mapped_resource);
 
     *out_texture = job.texture;
     *out_frame_id = job.frame_id;
@@ -497,6 +594,47 @@ bool NvencEncoder::EncodeFrame(ID3D11Texture2D* texture, bool force_idr,
     ID3D11Texture2D* completed_texture = nullptr;
     int completed_frame_id = 0;
     return GetCompletedFrame(out_bitstream, &completed_texture, &completed_frame_id, UINT64_MAX);
+}
+
+bool NvencEncoder::ReconfigureBitrate(uint32_t bitrate_kbps) {
+    if (!initialized_ || !encoder_handle_ || bitrate_kbps == 0) {
+        return false;
+    }
+
+    EncoderConfig updated_encoder_config = config_;
+    updated_encoder_config.bitrate_kbps = bitrate_kbps;
+    updated_encoder_config.max_bitrate_kbps = bitrate_kbps;
+
+    NV_ENC_CONFIG updated_encode_config = active_encode_config_;
+    ApplyRateControl(updated_encode_config, updated_encoder_config);
+
+    NV_ENC_INITIALIZE_PARAMS updated_initialize_params =
+        active_initialize_params_;
+    updated_initialize_params.encodeConfig = &updated_encode_config;
+
+    NV_ENC_RECONFIGURE_PARAMS reconfigure_params{};
+    reconfigure_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    reconfigure_params.reInitEncodeParams = updated_initialize_params;
+    reconfigure_params.forceIDR = 1;
+
+    std::lock_guard<std::mutex> api_lock(api_mutex_);
+    const NVENCSTATUS status = nv_api_.nvEncReconfigureEncoder(
+        encoder_handle_, &reconfigure_params);
+    if (status != NV_ENC_SUCCESS) {
+        LOG_NVENC_ERR("nvEncReconfigureEncoder", status);
+        return false;
+    }
+
+    config_ = updated_encoder_config;
+    active_encode_config_ = updated_encode_config;
+    active_initialize_params_ = updated_initialize_params;
+    active_initialize_params_.encodeConfig = &active_encode_config_;
+
+    std::printf(
+        "[NvencEncoder] bitrate reconfigured: %u kbps\n",
+        bitrate_kbps);
+    std::fflush(stdout);
+    return true;
 }
 
 // ---------------------------------------------------------------------------

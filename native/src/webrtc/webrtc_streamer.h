@@ -1,42 +1,52 @@
 #pragma once
-#include <string>
-#include <memory>
-#include <functional>
-#include <cstdint>
 
-// PimplパターンによるWebRTCストリーマー実装
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+
 class WebrtcStreamer {
 public:
+    using LocalDescriptionCallback =
+        std::function<void(const std::string& sdp, const std::string& type)>;
+    using LocalCandidateCallback =
+        std::function<void(const std::string& candidate, const std::string& mid)>;
+    using MessageCallback = std::function<void(const std::string& message)>;
+    using StateChangeCallback = std::function<void(bool connected)>;
+    using KeyFrameRequestCallback = std::function<void()>;
+    using BitrateRecommendationCallback =
+        std::function<void(uint32_t bitrate_bps)>;
+
     WebrtcStreamer();
     ~WebrtcStreamer();
 
-    // ストリーマーの初期化
+    WebrtcStreamer(const WebrtcStreamer&) = delete;
+    WebrtcStreamer& operator=(const WebrtcStreamer&) = delete;
+
     bool Initialize();
-    // ストリーマーの終了処理
     void Shutdown();
 
-    // コールバック登録
-    // ローカルSDP生成時（Offer/Answer）のコールバック
-    void SetLocalDescriptionCallback(std::function<void(const std::string& sdp, const std::string& type)> cb);
-    // ローカルICE候補生成時のコールバック
-    void SetLocalCandidateCallback(std::function<void(const std::string& candidate, const std::string& mid)> cb);
-    // Data Channelでのメッセージ受信用（マウス/キーボード入力制御用）のコールバック
-    void SetMessageCallback(std::function<void(const std::string& msg)> cb);
-    // 接続状態変更時のコールバック
-    void SetStateChangeCallback(std::function<void(bool connected)> cb);
+    void SetLocalDescriptionCallback(LocalDescriptionCallback callback);
+    void SetLocalCandidateCallback(LocalCandidateCallback callback);
+    void SetMessageCallback(MessageCallback callback);
+    void SetStateChangeCallback(StateChangeCallback callback);
+    void SetKeyFrameRequestCallback(KeyFrameRequestCallback callback);
+    void SetBitrateRecommendationCallback(
+        BitrateRecommendationCallback callback);
 
-    // シグナリングメッセージの処理
-    // リモートのSDP (Offer/Answer) または ICE候補 を設定する
-    bool ProcessSignalingMessage(const std::string& msg_type, const std::string& sdp_or_candidate, const std::string& mid = "");
+    bool ProcessSignalingMessage(
+        const std::string& message_type,
+        const std::string& sdp_or_candidate,
+        const std::string& mid = "");
 
-    // 映像フレーム (H.264 NALUデータ) をWebRTCトラックへ送信
-    bool PushVideoFrame(const uint8_t* data, size_t size, uint64_t timestamp_us);
+    bool PushVideoFrame(
+        const uint8_t* data,
+        size_t size,
+        uint64_t timestamp_us);
+    bool SendMessageOverDataChannel(const std::string& message);
 
-    // Data Channel経由でのメッセージ送信
-    bool SendMessageOverDataChannel(const std::string& msg);
-
-    // 現在接続されているか
-    bool IsConnected() const;
+    [[nodiscard]] bool IsConnected() const;
 
 private:
     class Impl;

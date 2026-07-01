@@ -79,6 +79,7 @@ add_library(yamanoha_core SHARED
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
     src/encoder/nvenc_encoder.cpp
+    src/pipeline/adaptive_bitrate_controller.cpp
     src/pipeline/frame_pipeline.cpp
     src/webrtc/webrtc_streamer.cpp
 )
@@ -135,4 +136,13 @@ target_include_directories(webrtc_test PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(webrtc_test PRIVATE ${LIBS} datachannel)
 if(MSVC)
     target_compile_options(webrtc_test PRIVATE /utf-8)
+endif()
+
+add_executable(pipeline_primitives_test
+    test/pipeline_primitives_test.cpp
+    src/pipeline/adaptive_bitrate_controller.cpp
+)
+target_include_directories(pipeline_primitives_test PRIVATE src)
+if(MSVC)
+    target_compile_options(pipeline_primitives_test PRIVATE /utf-8)
 endif()

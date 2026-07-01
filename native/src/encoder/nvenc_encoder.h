@@ -65,6 +65,9 @@ public:
     /// @return 成功時 true
     bool Flush(std::vector<uint8_t>& out_bitstream);
 
+    /// @brief 実行中のセッションのビットレートを変更する
+    bool ReconfigureBitrate(uint32_t bitrate_kbps);
+
     /// @brief 全リソースを解放する
     void Shutdown();
 
@@ -76,12 +79,14 @@ private:
     // NVENC APIテーブルを DLL から動的ロードする
     bool LoadNvencApi();
 
-    // 出力ビットストリーム用バッファを作成
-    bool CreateOutputBuffers();
-
     // D3D11 テクスチャリソースを NVENC 入力リソースとして登録・マップする
     void* RegisterResource(ID3D11Texture2D* texture);
     void UnregisterResource(void* registered_resource);
+
+    bool BuildSessionConfiguration(
+        const EncoderConfig& config,
+        NV_ENC_CONFIG& encode_config,
+        NV_ENC_INITIALIZE_PARAMS& initialize_params);
 
 private:
     // D3D11 デバイス
@@ -98,7 +103,10 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     EncoderConfig config_{};
+    NV_ENC_CONFIG active_encode_config_{};
+    NV_ENC_INITIALIZE_PARAMS active_initialize_params_{};
     bool initialized_ = false;
+    std::mutex api_mutex_;
 
     // 非同期エンコード用リソースプール管理
     bool CreateAsyncResources();
@@ -110,6 +118,7 @@ private:
         void* mapped_resource = nullptr;
         NV_ENC_OUTPUT_PTR output_buffer = nullptr;
         HANDLE completion_event = nullptr;
+        uint64_t submitted_time_us = 0;
     };
 
     std::vector<NV_ENC_OUTPUT_PTR> free_output_buffers_;

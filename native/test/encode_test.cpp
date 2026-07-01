@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 2. ディスプレイ列挙
-    auto displays = DisplayManager::EnumerateDisplays();
+    auto displays = yamanoha::DisplayManager::EnumerateDisplays();
     
     int selected_adapter = 0;
     int selected_output = 0;

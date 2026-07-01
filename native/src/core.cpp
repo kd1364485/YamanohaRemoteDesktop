@@ -393,6 +393,7 @@ YAMANOHA_API int yamanoha_process_signaling(
     const char* sdp_or_candidate,
     const char* mid
 ) {
+    std::lock_guard<std::mutex> lock(g_engine.mutex);
     if (!g_frame_pipeline || !msg_type || !sdp_or_candidate) {
         return 0;
     }
@@ -414,6 +415,7 @@ YAMANOHA_API int yamanoha_process_signaling(
 // データチャネルメッセージ送信
 // ---------------------------------------------------------------------------
 YAMANOHA_API int yamanoha_send_message(const char* message) {
+    std::lock_guard<std::mutex> lock(g_engine.mutex);
     if (!g_frame_pipeline || !message) {
         return 0;
     }

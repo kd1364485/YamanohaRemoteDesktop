@@ -155,6 +155,15 @@ public:
             video_track = video_track_;
         }
         if (!video_track || !video_track->isOpen()) {
+            static auto last_track_warn =
+                std::chrono::steady_clock::time_point::min();
+            auto now = std::chrono::steady_clock::now();
+            if (now - last_track_warn > std::chrono::seconds(2)) {
+                std::printf("[WebrtcStreamer] PushVideoFrame: track not open (track=%p isOpen=%d)\n",
+                    video_track.get(), video_track ? video_track->isOpen() : 0);
+                std::fflush(stdout);
+                last_track_warn = now;
+            }
             return false;
         }
 
@@ -245,9 +254,35 @@ private:
             if (!context->active.load(std::memory_order_acquire)) {
                 return;
             }
+
+            const char* state_name = "Unknown";
+            switch (state) {
+                case rtc::PeerConnection::State::New:         state_name = "New"; break;
+                case rtc::PeerConnection::State::Connecting:  state_name = "Connecting"; break;
+                case rtc::PeerConnection::State::Connected:   state_name = "Connected"; break;
+                case rtc::PeerConnection::State::Disconnected: state_name = "Disconnected"; break;
+                case rtc::PeerConnection::State::Failed:      state_name = "Failed"; break;
+                case rtc::PeerConnection::State::Closed:      state_name = "Closed"; break;
+            }
+            std::printf("[WebrtcStreamer] PeerConnection state: %s\n", state_name);
+            std::fflush(stdout);
+
             const bool connected =
                 state == rtc::PeerConnection::State::Connected;
+            const bool was_connected =
+                context->connected.load(std::memory_order_acquire);
             context->connected.store(connected, std::memory_order_release);
+
+            // Force keyframe on connection recovery to help client decoder
+            // resync after a temporary disconnection.
+            if (connected && !was_connected) {
+                std::lock_guard<std::mutex> lock(context->mutex);
+                if (context->keyframe_request) {
+                    std::printf("[WebrtcStreamer] Forcing keyframe on connection recovery\n");
+                    std::fflush(stdout);
+                    context->keyframe_request();
+                }
+            }
 
             std::lock_guard<std::mutex> lock(context->mutex);
             if (context->state_change) {
@@ -350,14 +385,25 @@ private:
             }));
         video_track->setMediaHandler(packetizer);
 
+        video_track->onClosed([] {
+            std::printf("[WebrtcStreamer] Video track closed\n");
+            std::fflush(stdout);
+        });
+
         std::lock_guard<std::mutex> lock(transport_mutex_);
         video_track_ = std::move(video_track);
     }
 
     void CreateControlChannel(
         const std::shared_ptr<rtc::PeerConnection>& peer_connection) {
+        rtc::DataChannelInit dc_config;
+        // Input events are real-time: use unreliable/unordered mode
+        // (like UDP) so lost packets don't block subsequent input.
+        dc_config.reliability.unordered = true;
+        dc_config.reliability.maxRetransmits = 0;
+
         auto data_channel =
-            peer_connection->createDataChannel(kInputChannelLabel);
+            peer_connection->createDataChannel(kInputChannelLabel, dc_config);
         ConfigureControlChannel(data_channel, callback_context_);
 
         std::lock_guard<std::mutex> lock(transport_mutex_);

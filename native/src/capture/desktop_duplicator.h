@@ -132,6 +132,9 @@ private:
     D3D11_TEXTURE2D_DESC cached_desc_{};
     bool desc_cached_ = false;
 
+    // 最後のフレームのキャッシュ（デスクトップが静的時のキーフレーム送信用）
+    ComPtr<ID3D11Texture2D> last_texture_;
+
     // デバッグ・フォールバック関連
     bool use_fallback_ = false;                       // フォールバック（ダミーテクスチャ）モードフラグ
     ComPtr<ID3D11Texture2D> fallback_texture_;        // デバッグ用ダミーテクスチャ

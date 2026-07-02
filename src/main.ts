@@ -99,6 +99,11 @@ async function setupWebRTC(): Promise<void> {
     console.log("Received remote track:", event.track.kind);
     remoteStream = event.streams[0];
 
+    // トラック状態変化を監視（デバッグ用）
+    event.track.onmute = () => console.warn("[client] Video track muted");
+    event.track.onunmute = () => console.log("[client] Video track unmuted");
+    event.track.onended = () => console.warn("[client] Video track ended");
+
     // 受信側ジッターバッファを軽めに設定して再生遅延を抑える。
     // 0にするとモバイル回線のパケット並べ替え/遅延でデコード失敗→フリーズを誘発するため、
     // 完全な無効化は避け、控えめな目標値(既定120ms)に留める。
@@ -123,6 +128,17 @@ async function setupWebRTC(): Promise<void> {
     if (video && remoteStream) {
       video.srcObject = remoteStream;
       video.play().catch((err) => console.error("Video play error:", err));
+
+      // モバイルブラウザでvideoが一時停止したら自動再開
+      video.onpause = () => {
+        // ユーザー意図のポーズ以外（ブラウザの省電力等）は自動再開
+        if (remoteStream && remoteStream.active) {
+          video.play().catch(() => {});
+        }
+      };
+
+      // フリーズ検出: requestVideoFrameCallbackでフレーム更新を監視
+      startFreezeDetection(video);
     }
   };
 
@@ -137,6 +153,75 @@ async function setupWebRTC(): Promise<void> {
   };
 
   console.log("WebRTC setup complete");
+}
+
+// --- フリーズ検出と自動回復 ---
+// ビデオフレームの更新を監視し、一定時間更新がない場合は回復を試みる
+let freezeCheckTimer: ReturnType<typeof setTimeout> | null = null;
+let lastFrameTime = 0;
+let freezeRecoveryAttempts = 0;
+const FREEZE_THRESHOLD_MS = 2000;
+const FREEZE_MAX_RECOVERY_ATTEMPTS = 3;
+
+function startFreezeDetection(video: HTMLVideoElement): void {
+  stopFreezeDetection();
+  lastFrameTime = Date.now();
+  freezeRecoveryAttempts = 0;
+
+  // requestVideoFrameCallback APIがあれば使用（より正確）
+  if ("requestVideoFrameCallback" in video) {
+    const onFrame = () => {
+      lastFrameTime = Date.now();
+      if (freezeRecoveryAttempts > 0) {
+        console.log("[client] Video recovered from freeze");
+        freezeRecoveryAttempts = 0;
+      }
+      (video as any).requestVideoFrameCallback(onFrame);
+    };
+    (video as any).requestVideoFrameCallback(onFrame);
+  }
+
+  // タイマーベースのフォールバック検出
+  freezeCheckTimer = setInterval(() => {
+    const elapsed = Date.now() - lastFrameTime;
+    if (elapsed < FREEZE_THRESHOLD_MS) return;
+
+    console.warn(`[client] Video freeze detected (${elapsed}ms without frames)`);
+    if (freezeRecoveryAttempts >= FREEZE_MAX_RECOVERY_ATTEMPTS) {
+      console.warn("[client] Max recovery attempts reached, giving up");
+      return;
+    }
+    freezeRecoveryAttempts++;
+    recoverFromFreeze(video);
+  }, 1000);
+}
+
+function stopFreezeDetection(): void {
+  if (freezeCheckTimer) {
+    clearInterval(freezeCheckTimer);
+    freezeCheckTimer = null;
+  }
+}
+
+function recoverFromFreeze(video: HTMLVideoElement): void {
+  // 1. play()を再試行（ブラウザの省電力機能で停止した場合に効く）
+  if (video.paused) {
+    console.log("[client] Recovery: video was paused, calling play()");
+    video.play().catch(() => {});
+    return;
+  }
+
+  // 2. srcObjectを再設定（デコーダをリセット）
+  if (remoteStream) {
+    console.log("[client] Recovery: resetting srcObject");
+    video.srcObject = null;
+    setTimeout(() => {
+      if (remoteStream) {
+        video.srcObject = remoteStream;
+        video.play().catch(() => {});
+      }
+    }, 100);
+  }
 }
 
 // WebRTC Offer受信処理
@@ -552,6 +637,10 @@ function connectToHost(hostId: string): void {
   clientWs.onclose = () => {
     // キーボード捕捉を解除（押しっぱなしキーも解放）
     detachRemoteKeyboard();
+    // タッチリスナーも解除（再接続時の重複防止）
+    detachTouchControls();
+    // フリーズ検出を停止
+    stopFreezeDetection();
     if (!document.getElementById("remote-view")?.classList.contains("hidden")) {
       showView("home-view");
       setConnectionStatus("未接続", "gray");
@@ -760,7 +849,29 @@ function detachRemoteKeyboard(): void {
 // --- スマホ向けタッチ操作（トラックパッドモード） ---
 // 指のドラッグ → カーソルを相対移動 / タップ → クリック
 // 2本指ドラッグ → スクロール / 2本指タップ → 右クリック
+
+// 再接続時に重複登録を防ぐため、タッチハンドラを保存
+let touchTarget: HTMLElement | null = null;
+let touchStartHandler: ((e: TouchEvent) => void) | null = null;
+let touchMoveHandler: ((e: TouchEvent) => void) | null = null;
+let touchEndHandler: ((e: TouchEvent) => void) | null = null;
+
+function detachTouchControls(): void {
+  if (touchTarget) {
+    if (touchStartHandler) touchTarget.removeEventListener("touchstart", touchStartHandler, { passive: false } as AddEventListenerOptions);
+    if (touchMoveHandler) touchTarget.removeEventListener("touchmove", touchMoveHandler, { passive: false } as AddEventListenerOptions);
+    if (touchEndHandler) touchTarget.removeEventListener("touchend", touchEndHandler, { passive: false } as AddEventListenerOptions);
+  }
+  touchTarget = null;
+  touchStartHandler = null;
+  touchMoveHandler = null;
+  touchEndHandler = null;
+}
+
 function setupTouchControls(el: HTMLElement): void {
+  // 既存のリスナーを削除してから再設定（再接続時の重複防止）
+  detachTouchControls();
+
   // ブラウザのスクロール・ズーム・プルダウン更新を無効化
   el.style.touchAction = "none";
   (el.style as any).overscrollBehavior = "none";
@@ -787,7 +898,7 @@ function setupTouchControls(el: HTMLElement): void {
     sendInput(obj);
   };
 
-  el.addEventListener("touchstart", (e) => {
+  touchStartHandler = (e: TouchEvent) => {
     e.preventDefault();
     lastTouchTime = Date.now();
     // タップで再フォーカス（物理キーボード入力を拾えるように）
@@ -807,9 +918,9 @@ function setupTouchControls(el: HTMLElement): void {
     if (e.touches.length === 2) {
       lastScrollY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
     }
-  }, { passive: false });
+  };
 
-  el.addEventListener("touchmove", (e) => {
+  touchMoveHandler = (e: TouchEvent) => {
     e.preventDefault();
     lastTouchTime = Date.now();
 
@@ -844,9 +955,9 @@ function setupTouchControls(el: HTMLElement): void {
     if (dx !== 0 || dy !== 0) {
       send({ type: "input", action: "mouse-move-rel", dx: Math.round(dx), dy: Math.round(dy) });
     }
-  }, { passive: false });
+  };
 
-  el.addEventListener("touchend", (e) => {
+  touchEndHandler = (e: TouchEvent) => {
     e.preventDefault();
     lastTouchTime = Date.now();
     const elapsed = Date.now() - startTime;
@@ -881,5 +992,10 @@ function setupTouchControls(el: HTMLElement): void {
     }
     dragCandidate = false;
     touchCount = 0;
-  }, { passive: false });
+  };
+
+  touchTarget = el;
+  el.addEventListener("touchstart", touchStartHandler, { passive: false } as AddEventListenerOptions);
+  el.addEventListener("touchmove", touchMoveHandler, { passive: false } as AddEventListenerOptions);
+  el.addEventListener("touchend", touchEndHandler, { passive: false } as AddEventListenerOptions);
 }

@@ -239,6 +239,15 @@ bool DesktopDuplicator::AcquireFrame(CapturedFrame& frame, uint32_t timeout_ms) 
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         // タイムアウト: 画面に変化がなかった（正常）
+        // キャッシュしたテクスチャがあれば返す（周期キーフレーム送信等で使用）
+        if (last_texture_) {
+            frame.texture = last_texture_;
+            frame.width = width_;
+            frame.height = height_;
+            frame.has_new_frame = false;
+            frame.frame_info = {};
+            return true;
+        }
         frame.has_new_frame = false;
         frame.width = width_;
         frame.height = height_;
@@ -285,6 +294,21 @@ bool DesktopDuplicator::AcquireFrame(CapturedFrame& frame, uint32_t timeout_ms) 
     }
 
     frame_acquired_ = true;
+
+    // キャプチャしたテクスチャをキャッシュにコピー（静的画面時のキーフレーム送信用）
+    if (frame_info.LastPresentTime.QuadPart != 0) {
+        if (!last_texture_) {
+            D3D11_TEXTURE2D_DESC desc = cached_desc_;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            desc.CPUAccessFlags = 0;
+            desc.MiscFlags = 0;
+            device_->CreateTexture2D(&desc, nullptr, &last_texture_);
+        }
+        if (last_texture_) {
+            context_->CopyResource(last_texture_.Get(), texture.Get());
+        }
+    }
 
     // 結果を格納
     frame.texture = std::move(texture);
@@ -406,6 +430,7 @@ void DesktopDuplicator::Shutdown() {
 
     duplication_.Reset();
     output_.Reset();
+    last_texture_.Reset();
     context_.Reset();
     device_.Reset();
 

@@ -15,6 +15,7 @@ constexpr size_t kMaximumFramesInFlight = 3;
 constexpr uint64_t kEncoderPollTimeoutUs = 5000;
 constexpr auto kSenderWaitTimeout = std::chrono::milliseconds(5);
 constexpr auto kIdleWait = std::chrono::milliseconds(1);
+constexpr auto kPeriodicKeyFrameInterval = std::chrono::seconds(3);
 // nvEncReconfigureEncoder can strand completion events when asynchronous
 // frames are still in flight. Keep streaming at the configured bitrate until
 // reconfiguration is implemented as a drain-and-resume operation.
@@ -258,10 +259,13 @@ void FramePipeline::ReleaseResources() {
 
 void FramePipeline::CaptureLoop() {
     bool first_frame = true;
+    auto last_keyframe_time = std::chrono::steady_clock::now();
 
     while (running_.load(std::memory_order_acquire)) {
         const auto frame_started = std::chrono::steady_clock::now();
         if (!streamer_ || !streamer_->IsConnected()) {
+            // Reset first_frame so the next frame after reconnection is a keyframe
+            first_frame = true;
             std::this_thread::sleep_for(kIdleWait);
             continue;
         }
@@ -278,7 +282,18 @@ void FramePipeline::CaptureLoop() {
             continue;
         }
 
-        if (!captured_frame.has_new_frame && !first_frame) {
+        // 周期キーフレームが必要かどうかを先に判定
+        const bool periodic_keyframe_due =
+            (frame_started - last_keyframe_time >= kPeriodicKeyFrameInterval);
+
+        if (!captured_frame.has_new_frame && !first_frame && !periodic_keyframe_due) {
+            capture_engine_->ReleaseFrame();
+            std::this_thread::sleep_for(kIdleWait);
+            continue;
+        }
+
+        // キャッシュテクスチャがない場合はスキップ（初回やACCESS_LOST後）
+        if (!captured_frame.texture) {
             capture_engine_->ReleaseFrame();
             std::this_thread::sleep_for(kIdleWait);
             continue;
@@ -302,7 +317,8 @@ void FramePipeline::CaptureLoop() {
 
         const bool force_key_frame =
             first_frame ||
-            force_key_frame_.exchange(false, std::memory_order_acq_rel);
+            force_key_frame_.exchange(false, std::memory_order_acq_rel) ||
+            (frame_started - last_keyframe_time >= kPeriodicKeyFrameInterval);
         const uint64_t timestamp_us =
             TimestampMicroseconds(frame_started);
 
@@ -311,17 +327,6 @@ void FramePipeline::CaptureLoop() {
         // that driver call or EncoderLoop cannot perform the drain.
         const int frame_id = encoder_->SubmitFrame(
             encode_texture, force_key_frame);
-        if (frame_id >= 0) {
-            std::lock_guard<std::mutex> lock(submitted_mutex_);
-            submitted_frames_.emplace(
-                frame_id,
-                SubmittedFrame{encode_texture, timestamp_us});
-        }
-        if (frame_id >= 0) {
-            submitted_count_.fetch_add(1, std::memory_order_relaxed);
-            submitted_cv_.notify_one();
-        }
-
         if (frame_id < 0) {
             ReturnEncodeTexture(encode_texture);
             if (force_key_frame) {
@@ -329,6 +334,22 @@ void FramePipeline::CaptureLoop() {
             }
             continue;
         }
+
+        if (force_key_frame) {
+            last_keyframe_time = frame_started;
+            std::printf("[FramePipeline] IDR keyframe sent (frame_id=%d)\n",
+                        frame_id);
+            std::fflush(stdout);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(submitted_mutex_);
+            submitted_frames_.emplace(
+                frame_id,
+                SubmittedFrame{encode_texture, timestamp_us});
+        }
+        submitted_count_.fetch_add(1, std::memory_order_relaxed);
+        submitted_cv_.notify_one();
 
         first_frame = false;
         const auto elapsed = std::chrono::steady_clock::now() - frame_started;
@@ -442,47 +463,19 @@ bool FramePipeline::CopyToEncodeTexture(
         return false;
     }
 
-    D3D11_TEXTURE2D_DESC source_description{};
-    D3D11_TEXTURE2D_DESC staging_description{};
-    D3D11_TEXTURE2D_DESC destination_description{};
-    source->GetDesc(&source_description);
-    destination->GetDesc(&destination_description);
+    D3D11_TEXTURE2D_DESC source_desc{};
+    D3D11_TEXTURE2D_DESC dest_desc{};
+    source->GetDesc(&source_desc);
+    destination->GetDesc(&dest_desc);
 
-    if (staging_texture_) {
-        staging_texture_->GetDesc(&staging_description);
-    }
-    if (!staging_texture_ ||
-        source_description.Width != staging_description.Width ||
-        source_description.Height != staging_description.Height ||
-        source_description.Format != staging_description.Format) {
-        D3D11_TEXTURE2D_DESC new_staging_description = source_description;
-        new_staging_description.Usage = D3D11_USAGE_STAGING;
-        new_staging_description.BindFlags = 0;
-        new_staging_description.CPUAccessFlags =
-            D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
-        new_staging_description.MiscFlags = 0;
-        staging_texture_.Reset();
-        const HRESULT create_result =
-            capture_engine_->GetDevice()->CreateTexture2D(
-                &new_staging_description, nullptr, &staging_texture_);
-        if (FAILED(create_result)) {
-            std::printf(
-                "[FramePipeline] staging texture creation failed: 0x%08lX\n",
-                create_result);
-            return false;
-        }
-        std::printf(
-            "[FramePipeline] capture texture: %ux%u, output: %ux%u, rotation=%d\n",
-            source_description.Width,
-            source_description.Height,
-            destination_description.Width,
-            destination_description.Height,
-            static_cast<int>(capture_engine_->GetDisplay().rotation));
+    if (!EnsureStagingTexture(source_desc)) {
+        return false;
     }
 
     capture_context->CopyResource(staging_texture_.Get(), source);
+
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    const HRESULT result = capture_context->Map(
+    HRESULT result = capture_context->Map(
         staging_texture_.Get(), 0, D3D11_MAP_READ_WRITE, 0, &mapped);
     if (FAILED(result)) {
         std::printf(
@@ -492,78 +485,136 @@ bool FramePipeline::CopyToEncodeTexture(
     }
 
     const auto& display = capture_engine_->GetDisplay();
-    const uint32_t output_width = destination_description.Width;
-    const uint32_t output_height = destination_description.Height;
-    const auto* source_bytes = static_cast<const uint8_t*>(mapped.pData);
-    const bool quarter_turn_dimensions =
-        source_description.Width == output_height &&
-        source_description.Height == output_width;
+    const uint32_t output_width = dest_desc.Width;
+    const uint32_t output_height = dest_desc.Height;
+    const bool quarter_turn =
+        source_desc.Width == output_height &&
+        source_desc.Height == output_width;
     const bool needs_rotation =
         display.rotation == DXGI_MODE_ROTATION_ROTATE180 ||
         ((display.rotation == DXGI_MODE_ROTATION_ROTATE90 ||
           display.rotation == DXGI_MODE_ROTATION_ROTATE270) &&
-         quarter_turn_dimensions);
+         quarter_turn);
 
     if (!needs_rotation) {
-        cursor_compositor_.Composite(
-            static_cast<uint8_t*>(mapped.pData),
-            mapped.RowPitch,
-            output_width,
-            output_height,
-            display.bounds);
-        encode_context->UpdateSubresource(
-            destination, 0, nullptr, mapped.pData, mapped.RowPitch, 0);
+        CopyWithoutRotation(mapped, output_width, output_height, destination);
     } else {
-        std::vector<uint32_t> rotated_pixels(
-            static_cast<size_t>(output_width) * output_height);
-        const auto* source_pixels =
-            reinterpret_cast<const uint32_t*>(source_bytes);
-        const uint32_t source_stride = mapped.RowPitch / sizeof(uint32_t);
-
-        for (uint32_t y = 0; y < output_height; ++y) {
-            for (uint32_t x = 0; x < output_width; ++x) {
-                uint32_t source_x = x;
-                uint32_t source_y = y;
-                switch (display.rotation) {
-                    case DXGI_MODE_ROTATION_ROTATE90:
-                        source_x = y;
-                        source_y = source_description.Height - 1 - x;
-                        break;
-                    case DXGI_MODE_ROTATION_ROTATE180:
-                        source_x = source_description.Width - 1 - x;
-                        source_y = source_description.Height - 1 - y;
-                        break;
-                    case DXGI_MODE_ROTATION_ROTATE270:
-                        source_x = source_description.Width - 1 - y;
-                        source_y = x;
-                        break;
-                    default:
-                        break;
-                }
-                rotated_pixels[static_cast<size_t>(y) * output_width + x] =
-                    source_pixels[
-                        static_cast<size_t>(source_y) * source_stride +
-                        source_x];
-            }
-        }
-
-        const uint32_t output_stride = output_width * sizeof(uint32_t);
-        cursor_compositor_.Composite(
-            reinterpret_cast<uint8_t*>(rotated_pixels.data()),
-            output_stride,
-            output_width,
-            output_height,
-            display.bounds);
-        encode_context->UpdateSubresource(
-            destination,
-            0,
-            nullptr,
-            rotated_pixels.data(),
-            output_stride,
-            0);
+        CopyWithRotation(
+            mapped, source_desc, output_width, output_height, destination);
     }
+
     capture_context->Unmap(staging_texture_.Get(), 0);
     return true;
+}
+
+bool FramePipeline::EnsureStagingTexture(
+    const D3D11_TEXTURE2D_DESC& source_desc) {
+    D3D11_TEXTURE2D_DESC staging_desc{};
+    if (staging_texture_) {
+        staging_texture_->GetDesc(&staging_desc);
+    }
+
+    if (staging_texture_ &&
+        source_desc.Width == staging_desc.Width &&
+        source_desc.Height == staging_desc.Height &&
+        source_desc.Format == staging_desc.Format) {
+        return true;
+    }
+
+    D3D11_TEXTURE2D_DESC new_desc = source_desc;
+    new_desc.Usage = D3D11_USAGE_STAGING;
+    new_desc.BindFlags = 0;
+    new_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+    new_desc.MiscFlags = 0;
+    staging_texture_.Reset();
+
+    HRESULT result = capture_engine_->GetDevice()->CreateTexture2D(
+        &new_desc, nullptr, &staging_texture_);
+    if (FAILED(result)) {
+        std::printf(
+            "[FramePipeline] staging texture creation failed: 0x%08lX\n",
+            result);
+        return false;
+    }
+
+    std::printf(
+        "[FramePipeline] staging texture created: %ux%u, rotation=%d\n",
+        source_desc.Width,
+        source_desc.Height,
+        static_cast<int>(capture_engine_->GetDisplay().rotation));
+    return true;
+}
+
+void FramePipeline::CopyWithoutRotation(
+    const D3D11_MAPPED_SUBRESOURCE& mapped,
+    uint32_t output_width,
+    uint32_t output_height,
+    ID3D11Texture2D* destination) {
+    const auto& display = capture_engine_->GetDisplay();
+    cursor_compositor_.Composite(
+        static_cast<uint8_t*>(mapped.pData),
+        mapped.RowPitch,
+        output_width,
+        output_height,
+        display.bounds);
+    encode_device_manager_->GetContext()->UpdateSubresource(
+        destination, 0, nullptr, mapped.pData, mapped.RowPitch, 0);
+}
+
+void FramePipeline::CopyWithRotation(
+    const D3D11_MAPPED_SUBRESOURCE& mapped,
+    const D3D11_TEXTURE2D_DESC& source_desc,
+    uint32_t output_width,
+    uint32_t output_height,
+    ID3D11Texture2D* destination) {
+    const auto& display = capture_engine_->GetDisplay();
+    const auto* source_pixels =
+        reinterpret_cast<const uint32_t*>(mapped.pData);
+    const uint32_t source_stride = mapped.RowPitch / sizeof(uint32_t);
+
+    std::vector<uint32_t> rotated_pixels(
+        static_cast<size_t>(output_width) * output_height);
+
+    for (uint32_t y = 0; y < output_height; ++y) {
+        for (uint32_t x = 0; x < output_width; ++x) {
+            uint32_t sx = x;
+            uint32_t sy = y;
+            switch (display.rotation) {
+                case DXGI_MODE_ROTATION_ROTATE90:
+                    sx = y;
+                    sy = source_desc.Height - 1 - x;
+                    break;
+                case DXGI_MODE_ROTATION_ROTATE180:
+                    sx = source_desc.Width - 1 - x;
+                    sy = source_desc.Height - 1 - y;
+                    break;
+                case DXGI_MODE_ROTATION_ROTATE270:
+                    sx = source_desc.Width - 1 - y;
+                    sy = x;
+                    break;
+                default:
+                    break;
+            }
+            rotated_pixels[static_cast<size_t>(y) * output_width + x] =
+                source_pixels[
+                    static_cast<size_t>(sy) * source_stride + sx];
+        }
+    }
+
+    const uint32_t output_stride = output_width * sizeof(uint32_t);
+    cursor_compositor_.Composite(
+        reinterpret_cast<uint8_t*>(rotated_pixels.data()),
+        output_stride,
+        output_width,
+        output_height,
+        display.bounds);
+    encode_device_manager_->GetContext()->UpdateSubresource(
+        destination,
+        0,
+        nullptr,
+        rotated_pixels.data(),
+        output_stride,
+        0);
 }
 
 ID3D11Texture2D* FramePipeline::AcquireEncodeTexture() {

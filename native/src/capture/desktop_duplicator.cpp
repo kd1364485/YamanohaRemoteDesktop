@@ -292,7 +292,12 @@ bool DesktopDuplicator::AcquireFrame(CapturedFrame& frame, uint32_t timeout_ms) 
     frame.width = cached_desc_.Width;
     frame.height = cached_desc_.Height;
     // 新しいフレームかどうかは LastPresentTime で判定
-    frame.has_new_frame = (frame_info.LastPresentTime.QuadPart != 0);
+    // Desktop pixels and pointer position are reported independently by the
+    // Duplication API. The cursor is composited later in FramePipeline, so a
+    // pointer-only update must also produce a frame for the remote client.
+    frame.has_new_frame =
+        frame_info.LastPresentTime.QuadPart != 0 ||
+        frame_info.LastMouseUpdateTime.QuadPart != 0;
 
     return true;
 }

@@ -133,7 +133,7 @@ bool D3D11DeviceManager::InitializeForAdapter(IDXGIAdapter1* adapter) {
 
     // デバイス作成フラグ
     UINT createFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-#ifdef _DEBUG
+#if defined(_DEBUG) && defined(YAMANOHA_ENABLE_D3D_DEBUG_LAYER)
     // デバッグビルドではD3Dデバッグ層を有効化
     createFlags |= D3D11_CREATE_DEVICE_DEBUG;
     LOG_INFO("D3D11デバッグ層を有効にしました");

@@ -10,11 +10,47 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
-    MOUSEEVENTF_WHEEL
+    MOUSEEVENTF_WHEEL, MOUSEEVENTF_VIRTUALDESK
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN
+    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN
 };
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+#[derive(Clone, Copy)]
+struct DisplayBounds {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+static ACTIVE_DISPLAY: Lazy<Mutex<Option<DisplayBounds>>> =
+    Lazy::new(|| Mutex::new(None));
+
+pub fn set_active_display(x: i32, y: i32, width: u32, height: u32) {
+    *ACTIVE_DISPLAY.lock().unwrap() = Some(DisplayBounds {
+        x,
+        y,
+        width: width as i32,
+        height: height as i32,
+    });
+}
+
+fn active_display_position(nx: f64, ny: f64) -> (i32, i32) {
+    match *ACTIVE_DISPLAY.lock().unwrap() {
+        Some(bounds) => (
+            bounds.x + (nx.clamp(0.0, 1.0) * (bounds.width - 1).max(0) as f64).round() as i32,
+            bounds.y + (ny.clamp(0.0, 1.0) * (bounds.height - 1).max(0) as f64).round() as i32,
+        ),
+        None => (
+            (nx.clamp(0.0, 1.0) * (get_screen_width() - 1).max(0) as f64).round() as i32,
+            (ny.clamp(0.0, 1.0) * (get_screen_height() - 1).max(0) as f64).round() as i32,
+        ),
+    }
+}
 
 // GetCursorPos / SetCursorPos は windows-sys 0.52 の WindowsAndMessaging には無いため、raw FFI で直接呼び出す
 #[repr(C)]
@@ -44,8 +80,10 @@ pub fn get_screen_height() -> i32 {
 pub fn inject_mouse_move(x: i32, y: i32) -> Result<(), String> {
     unsafe {
         // デスクトップのプライマリ解像度を取得
-        let screen_width = GetSystemMetrics(SM_CXSCREEN);
-        let screen_height = GetSystemMetrics(SM_CYSCREEN);
+        let virtual_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let virtual_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let screen_width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let screen_height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
         if screen_width == 0 || screen_height == 0 {
             return Err("Failed to get screen metrics".to_string());
@@ -53,8 +91,10 @@ pub fn inject_mouse_move(x: i32, y: i32) -> Result<(), String> {
 
         // Windowsの絶対座標系 (0〜65535) へノーマライズ
         // Mickey 座標への変換式: (pos * 65536) / screen_size
-        let normalized_x = (x * 65536) / screen_width;
-        let normalized_y = (y * 65536) / screen_height;
+        let normalized_x =
+            (((x - virtual_x) as i64 * 65535) / (screen_width - 1).max(1) as i64) as i32;
+        let normalized_y =
+            (((y - virtual_y) as i64 * 65535) / (screen_height - 1).max(1) as i64) as i32;
 
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_MOUSE;
@@ -64,7 +104,8 @@ pub fn inject_mouse_move(x: i32, y: i32) -> Result<(), String> {
         mouse_input.dx = normalized_x;
         mouse_input.dy = normalized_y;
         mouse_input.mouseData = 0;
-        mouse_input.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+        mouse_input.dwFlags =
+            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
         mouse_input.time = 0;
         mouse_input.dwExtraInfo = 0;
 
@@ -320,22 +361,36 @@ pub fn handle_remote_input(message: &str) {
         "mouse-move" => {
             let nx = json["nx"].as_f64().unwrap_or(0.0);
             let ny = json["ny"].as_f64().unwrap_or(0.0);
-            let width = get_screen_width();
-            let height = get_screen_height();
-            inject_mouse_move(
-                (nx * width as f64) as i32,
-                (ny * height as f64) as i32,
-            )
+            let (x, y) = active_display_position(nx, ny);
+            inject_mouse_move(x, y)
         }
         "mouse-move-rel" => inject_mouse_move_rel(
             json["dx"].as_i64().unwrap_or(0) as i32,
             json["dy"].as_i64().unwrap_or(0) as i32,
         ),
-        "mouse-down" | "mouse-up" => inject_mouse_click(
-            parse_button_name(
-                json["button"].as_str().unwrap_or("left")),
-            action == "mouse-down",
-        ),
+        "mouse-down" | "mouse-up" => {
+            if action == "mouse-down" {
+                if let (Some(nx), Some(ny)) =
+                    (json["nx"].as_f64(), json["ny"].as_f64())
+                {
+                    let (x, y) = active_display_position(nx, ny);
+                    inject_mouse_move(x, y).and_then(|_| inject_mouse_click(
+                        parse_button_name(json["button"].as_str().unwrap_or("left")),
+                        true,
+                    ))
+                } else {
+                    inject_mouse_click(
+                        parse_button_name(json["button"].as_str().unwrap_or("left")),
+                        true,
+                    )
+                }
+            } else {
+                inject_mouse_click(
+                    parse_button_name(json["button"].as_str().unwrap_or("left")),
+                    false,
+                )
+            }
+        },
         "mouse-click" => inject_click(
             json["button"].as_str().unwrap_or("left"), 1),
         "mouse-double-click" => inject_click(
@@ -364,7 +419,11 @@ pub fn handle_remote_input(message: &str) {
         return;
     }
 
-    std::println!("[Rust Input] action applied: {}", action);
+    // Pointer moves can arrive hundreds of times per second. Logging every
+    // event distorts timing and floods the dev console.
+    if action != "mouse-move" && action != "mouse-move-rel" {
+        std::println!("[Rust Input] action applied: {}", action);
+    }
 }
 
 fn inject_click(button_name: &str, count: usize) -> Result<(), String> {

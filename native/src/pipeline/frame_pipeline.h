@@ -107,6 +107,11 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> force_key_frame_{true};
+    std::atomic<uint64_t> captured_count_{0};
+    std::atomic<uint64_t> submitted_count_{0};
+    std::atomic<uint64_t> encoded_count_{0};
+    std::atomic<uint64_t> sent_count_{0};
+    std::atomic<uint64_t> send_failure_count_{0};
     bool prepared_ = false;
 
     CursorCpuCompositor cursor_compositor_;

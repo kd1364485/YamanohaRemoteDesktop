@@ -43,7 +43,7 @@ let pendingIceCandidates: RTCIceCandidateInit[] = [];
 // 入力/カーソル用DataChannel（P2P直送）。ホストが作成しondatachannelで受信する。
 let inputChannel: RTCDataChannel | null = null;
 // 受信側ジッターバッファの目標(ミリ秒)。超低遅延優先に設定。
-const JITTER_BUFFER_TARGET_MS = 30;
+const JITTER_BUFFER_TARGET_MS = 120;
 
 // 入力をホストへ送信する。DataChannel(P2P直送)優先、未接続時はWebSocketリレーにフォールバック。
 function sendInput(obj: object): void {

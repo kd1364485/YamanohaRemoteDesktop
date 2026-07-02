@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cstdio>
 
 namespace yamanoha {
@@ -13,6 +14,10 @@ constexpr size_t kMaximumFramesInFlight = 3;
 constexpr uint64_t kEncoderPollTimeoutUs = 5000;
 constexpr auto kSenderWaitTimeout = std::chrono::milliseconds(5);
 constexpr auto kIdleWait = std::chrono::milliseconds(1);
+// nvEncReconfigureEncoder can strand completion events when asynchronous
+// frames are still in flight. Keep streaming at the configured bitrate until
+// reconfiguration is implemented as a drain-and-resume operation.
+constexpr bool kEnableDynamicBitrate = false;
 
 uint64_t TimestampMicroseconds(
     std::chrono::steady_clock::time_point time_point) {
@@ -40,6 +45,11 @@ bool FramePipeline::Start(
     fps_ = fps;
     current_bitrate_kbps_ = static_cast<uint32_t>(bitrate_kbps);
     force_key_frame_.store(true, std::memory_order_release);
+    captured_count_.store(0, std::memory_order_release);
+    submitted_count_.store(0, std::memory_order_release);
+    encoded_count_.store(0, std::memory_order_release);
+    sent_count_.store(0, std::memory_order_release);
+    send_failure_count_.store(0, std::memory_order_release);
 
     AdaptiveBitrateController::Config bitrate_config;
     bitrate_config.maximum_kbps = current_bitrate_kbps_;
@@ -173,26 +183,6 @@ bool FramePipeline::InitializeEncoderDevice(const Display& display) {
 bool FramePipeline::CreateTransferTextures(
     uint32_t width,
     uint32_t height) {
-    D3D11_TEXTURE2D_DESC staging_description{};
-    staging_description.Width = width;
-    staging_description.Height = height;
-    staging_description.MipLevels = 1;
-    staging_description.ArraySize = 1;
-    staging_description.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    staging_description.SampleDesc.Count = 1;
-    staging_description.Usage = D3D11_USAGE_STAGING;
-    staging_description.CPUAccessFlags =
-        D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
-
-    HRESULT result = capture_engine_->GetDevice()->CreateTexture2D(
-        &staging_description, nullptr, &staging_texture_);
-    if (FAILED(result)) {
-        std::printf(
-            "[FramePipeline] staging texture creation failed: 0x%08lX\n",
-            result);
-        return false;
-    }
-
     D3D11_TEXTURE2D_DESC encode_description{};
     encode_description.Width = width;
     encode_description.Height = height;
@@ -205,7 +195,7 @@ bool FramePipeline::CreateTransferTextures(
 
     for (size_t index = 0; index < kEncodeTexturePoolSize; ++index) {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-        result = encode_device_manager_->GetDevice()->CreateTexture2D(
+        HRESULT result = encode_device_manager_->GetDevice()->CreateTexture2D(
             &encode_description, nullptr, &texture);
         if (FAILED(result)) {
             std::printf(
@@ -320,6 +310,7 @@ void FramePipeline::CaptureLoop() {
             ReturnEncodeTexture(encode_texture);
             continue;
         }
+        captured_count_.fetch_add(1, std::memory_order_relaxed);
 
         const bool force_key_frame =
             first_frame ||
@@ -327,18 +318,19 @@ void FramePipeline::CaptureLoop() {
         const uint64_t timestamp_us =
             TimestampMicroseconds(frame_started);
 
-        int frame_id = -1;
-        {
+        // NvEncEncodePicture may block in synchronous mode until the output
+        // thread drains an earlier frame. Never hold submitted_mutex_ across
+        // that driver call or EncoderLoop cannot perform the drain.
+        const int frame_id = encoder_->SubmitFrame(
+            encode_texture, force_key_frame);
+        if (frame_id >= 0) {
             std::lock_guard<std::mutex> lock(submitted_mutex_);
-            frame_id = encoder_->SubmitFrame(
-                encode_texture, force_key_frame);
-            if (frame_id >= 0) {
-                submitted_frames_.emplace(
-                    frame_id,
-                    SubmittedFrame{encode_texture, timestamp_us});
-            }
+            submitted_frames_.emplace(
+                frame_id,
+                SubmittedFrame{encode_texture, timestamp_us});
         }
         if (frame_id >= 0) {
+            submitted_count_.fetch_add(1, std::memory_order_relaxed);
             submitted_cv_.notify_one();
         }
 
@@ -390,6 +382,7 @@ void FramePipeline::EncoderLoop() {
             continue;
         }
 
+        encoded_count_.fetch_add(1, std::memory_order_relaxed);
         encoded_frames_.Push(EncodedFrame{
             std::move(bitstream),
             submitted->timestamp_us,
@@ -398,8 +391,36 @@ void FramePipeline::EncoderLoop() {
 }
 
 void FramePipeline::SenderLoop() {
+    auto next_health_log =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (running_.load(std::memory_order_acquire) ||
            encoded_frames_.Size() > 0) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_health_log) {
+            size_t in_flight = 0;
+            {
+                std::lock_guard<std::mutex> lock(submitted_mutex_);
+                in_flight = submitted_frames_.size();
+            }
+            std::printf(
+                "[FramePipeline] health capture=%llu submit=%llu "
+                "encode=%llu sent=%llu send_fail=%llu in_flight=%zu queued=%zu\n",
+                static_cast<unsigned long long>(
+                    captured_count_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    submitted_count_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    encoded_count_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    sent_count_.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    send_failure_count_.load(std::memory_order_relaxed)),
+                in_flight,
+                encoded_frames_.Size());
+            std::fflush(stdout);
+            next_health_log = now + std::chrono::seconds(2);
+        }
+
         EncodedFrame frame;
         if (!encoded_frames_.WaitPopFor(frame, kSenderWaitTimeout)) {
             continue;
@@ -412,7 +433,10 @@ void FramePipeline::SenderLoop() {
                 frame.data.data(),
                 frame.data.size(),
                 frame.timestamp_us)) {
+            send_failure_count_.fetch_add(1, std::memory_order_relaxed);
             RequestKeyFrame();
+        } else {
+            sent_count_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -430,6 +454,44 @@ bool FramePipeline::CopyToEncodeTexture(
         return false;
     }
 
+    D3D11_TEXTURE2D_DESC source_description{};
+    D3D11_TEXTURE2D_DESC staging_description{};
+    D3D11_TEXTURE2D_DESC destination_description{};
+    source->GetDesc(&source_description);
+    destination->GetDesc(&destination_description);
+
+    if (staging_texture_) {
+        staging_texture_->GetDesc(&staging_description);
+    }
+    if (!staging_texture_ ||
+        source_description.Width != staging_description.Width ||
+        source_description.Height != staging_description.Height ||
+        source_description.Format != staging_description.Format) {
+        D3D11_TEXTURE2D_DESC new_staging_description = source_description;
+        new_staging_description.Usage = D3D11_USAGE_STAGING;
+        new_staging_description.BindFlags = 0;
+        new_staging_description.CPUAccessFlags =
+            D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+        new_staging_description.MiscFlags = 0;
+        staging_texture_.Reset();
+        const HRESULT create_result =
+            capture_engine_->GetDevice()->CreateTexture2D(
+                &new_staging_description, nullptr, &staging_texture_);
+        if (FAILED(create_result)) {
+            std::printf(
+                "[FramePipeline] staging texture creation failed: 0x%08lX\n",
+                create_result);
+            return false;
+        }
+        std::printf(
+            "[FramePipeline] capture texture: %ux%u, output: %ux%u, rotation=%d\n",
+            source_description.Width,
+            source_description.Height,
+            destination_description.Width,
+            destination_description.Height,
+            static_cast<int>(capture_engine_->GetDisplay().rotation));
+    }
+
     capture_context->CopyResource(staging_texture_.Get(), source);
     D3D11_MAPPED_SUBRESOURCE mapped{};
     const HRESULT result = capture_context->Map(
@@ -442,15 +504,76 @@ bool FramePipeline::CopyToEncodeTexture(
     }
 
     const auto& display = capture_engine_->GetDisplay();
-    cursor_compositor_.Composite(
-        static_cast<uint8_t*>(mapped.pData),
-        mapped.RowPitch,
-        capture_engine_->GetWidth(),
-        capture_engine_->GetHeight(),
-        display.bounds);
+    const uint32_t output_width = destination_description.Width;
+    const uint32_t output_height = destination_description.Height;
+    const auto* source_bytes = static_cast<const uint8_t*>(mapped.pData);
+    const bool quarter_turn_dimensions =
+        source_description.Width == output_height &&
+        source_description.Height == output_width;
+    const bool needs_rotation =
+        display.rotation == DXGI_MODE_ROTATION_ROTATE180 ||
+        ((display.rotation == DXGI_MODE_ROTATION_ROTATE90 ||
+          display.rotation == DXGI_MODE_ROTATION_ROTATE270) &&
+         quarter_turn_dimensions);
 
-    encode_context->UpdateSubresource(
-        destination, 0, nullptr, mapped.pData, mapped.RowPitch, 0);
+    if (!needs_rotation) {
+        cursor_compositor_.Composite(
+            static_cast<uint8_t*>(mapped.pData),
+            mapped.RowPitch,
+            output_width,
+            output_height,
+            display.bounds);
+        encode_context->UpdateSubresource(
+            destination, 0, nullptr, mapped.pData, mapped.RowPitch, 0);
+    } else {
+        std::vector<uint32_t> rotated_pixels(
+            static_cast<size_t>(output_width) * output_height);
+        const auto* source_pixels =
+            reinterpret_cast<const uint32_t*>(source_bytes);
+        const uint32_t source_stride = mapped.RowPitch / sizeof(uint32_t);
+
+        for (uint32_t y = 0; y < output_height; ++y) {
+            for (uint32_t x = 0; x < output_width; ++x) {
+                uint32_t source_x = x;
+                uint32_t source_y = y;
+                switch (display.rotation) {
+                    case DXGI_MODE_ROTATION_ROTATE90:
+                        source_x = y;
+                        source_y = source_description.Height - 1 - x;
+                        break;
+                    case DXGI_MODE_ROTATION_ROTATE180:
+                        source_x = source_description.Width - 1 - x;
+                        source_y = source_description.Height - 1 - y;
+                        break;
+                    case DXGI_MODE_ROTATION_ROTATE270:
+                        source_x = source_description.Width - 1 - y;
+                        source_y = x;
+                        break;
+                    default:
+                        break;
+                }
+                rotated_pixels[static_cast<size_t>(y) * output_width + x] =
+                    source_pixels[
+                        static_cast<size_t>(source_y) * source_stride +
+                        source_x];
+            }
+        }
+
+        const uint32_t output_stride = output_width * sizeof(uint32_t);
+        cursor_compositor_.Composite(
+            reinterpret_cast<uint8_t*>(rotated_pixels.data()),
+            output_stride,
+            output_width,
+            output_height,
+            display.bounds);
+        encode_context->UpdateSubresource(
+            destination,
+            0,
+            nullptr,
+            rotated_pixels.data(),
+            output_stride,
+            0);
+    }
     capture_context->Unmap(staging_texture_.Get(), 0);
     return true;
 }
@@ -485,6 +608,10 @@ bool FramePipeline::IsBacklogged() const {
 }
 
 void FramePipeline::ApplyBitrateRecommendation() {
+    if (!kEnableDynamicBitrate) {
+        return;
+    }
+
     const auto target = bitrate_controller_.TakeUpdate(
         current_bitrate_kbps_, std::chrono::steady_clock::now());
     if (!target) {

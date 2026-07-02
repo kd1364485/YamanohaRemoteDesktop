@@ -9,6 +9,49 @@ mod input_control;
 // WebSocket接続キャンセル用のoneshot送信チャネル
 static WS_CANCEL_TX: Lazy<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
 
+fn display_id(display: &ffi::YamanohaDisplayInfo) -> String {
+    format!("{}:{}", display.adapter_index, display.output_index)
+}
+
+fn wide_string(value: &[u16]) -> String {
+    let length = value.iter().position(|&ch| ch == 0).unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..length])
+}
+
+fn display_list_message(
+    displays: &[ffi::YamanohaDisplayInfo],
+    current_id: &str,
+) -> String {
+    let items: Vec<_> = displays
+        .iter()
+        .map(|display| {
+            serde_json::json!({
+                "id": display_id(display),
+                "label": wide_string(&display.name),
+                "width": display.width,
+                "height": display.height,
+                "primary": display.is_primary == 1,
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "type": "display-list",
+        "displays": items,
+        "currentId": current_id,
+    })
+    .to_string()
+}
+
+fn select_input_display(display: &ffi::YamanohaDisplayInfo) {
+    input_control::set_active_display(
+        display.x,
+        display.y,
+        display.width,
+        display.height,
+    );
+}
+
 #[tauri::command]
 async fn start_host(
     app: tauri::AppHandle,
@@ -40,6 +83,12 @@ async fn start_host(
         output_idx = first.output_index;
         w = first.width as i32;
         h = first.height as i32;
+    }
+    if let Some(selected) = displays
+        .iter()
+        .find(|d| d.adapter_index == adapter_idx && d.output_index == output_idx)
+    {
+        select_input_display(selected);
     }
 
     let fps = 60;
@@ -148,12 +197,65 @@ async fn start_host(
                             // 3. クライアントが接続要求したタイミングで初めて配信とWebRTCをキック (遅延初期化)
                             "client-connected" => {
                                 std::println!("[Rust WS] クライアント接続を検知。C++ストリームを開始します...");
+                                let current_id = format!("{}:{}", adapter_idx, output_idx);
+                                let _ = write.send(Message::Text(
+                                    display_list_message(&displays, &current_id)
+                                )).await;
                                 std::println!(
                                     "[Rust] ストリーム開始: Adapter={}, Output={}, 解像度={}x{}, FPS={}",
                                     adapter_idx, output_idx, w, h, fps
                                 );
                                 if let Err(e) = ffi::start_stream(adapter_idx, output_idx, w, h, fps, 4000) {
                                     std::println!("[Rust WS] C++ストリーム開始エラー: {}", e);
+                                }
+                            }
+
+                            "select-display" => {
+                                let requested_id = j["displayId"].as_str().unwrap_or("");
+                                if let Some(selected) = displays
+                                    .iter()
+                                    .find(|display| display_id(display) == requested_id)
+                                {
+                                    if selected.adapter_index == adapter_idx &&
+                                        selected.output_index == output_idx
+                                    {
+                                        continue;
+                                    }
+
+                                    std::println!(
+                                        "[Rust WS] Display switch requested: {} ({}x{})",
+                                        requested_id,
+                                        selected.width,
+                                        selected.height
+                                    );
+
+                                    let _ = ffi::stop_stream();
+                                    adapter_idx = selected.adapter_index;
+                                    output_idx = selected.output_index;
+                                    w = selected.width as i32;
+                                    h = selected.height as i32;
+                                    select_input_display(selected);
+
+                                    let current_id = display_id(selected);
+                                    let _ = write.send(Message::Text(
+                                        display_list_message(&displays, &current_id)
+                                    )).await;
+
+                                    if let Err(e) = ffi::start_stream(
+                                        adapter_idx,
+                                        output_idx,
+                                        w,
+                                        h,
+                                        fps,
+                                        4000,
+                                    ) {
+                                        std::println!("[Rust WS] Display switch failed: {}", e);
+                                    }
+                                } else {
+                                    std::println!(
+                                        "[Rust WS] Unknown display requested: {}",
+                                        requested_id
+                                    );
                                 }
                             }
 

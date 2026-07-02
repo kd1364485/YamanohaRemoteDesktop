@@ -13,6 +13,8 @@ namespace yamanoha {
 
 namespace {
 
+constexpr bool kUseAsyncEncoding = false;
+
 uint64_t NowMicroseconds() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -158,7 +160,7 @@ bool NvencEncoder::BuildSessionConfiguration(
     initialize_params.frameRateNum = (std::max)(config.fps, 1u);
     initialize_params.frameRateDen = 1;
     initialize_params.enablePTD = 1;
-    initialize_params.enableEncodeAsync = 1;
+    initialize_params.enableEncodeAsync = kUseAsyncEncoding ? 1 : 0;
     initialize_params.encodeConfig = &encode_config;
     return true;
 }
@@ -249,6 +251,11 @@ bool NvencEncoder::CreateAsyncResources() {
             LOG_NVENC_ERR("nvEncCreateBitstreamBuffer", status);
             ReleaseAsyncResources();
             return false;
+        }
+
+        if (!kUseAsyncEncoding) {
+            free_output_buffers_.push_back(bitstream_params.bitstreamBuffer);
+            continue;
         }
 
         HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -389,7 +396,8 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
     std::lock_guard<std::mutex> lock(jobs_mutex_);
     std::lock_guard<std::mutex> api_lock(api_mutex_);
 
-    if (free_output_buffers_.empty() || free_events_.empty()) {
+    if (free_output_buffers_.empty() ||
+        (kUseAsyncEncoding && free_events_.empty())) {
         std::printf("[NvencEncoder] 非同期リソースプールが枯渇しました\n");
         std::fflush(stdout);
         return -1;
@@ -397,11 +405,16 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
 
     NV_ENC_OUTPUT_PTR output_buffer = free_output_buffers_.back();
     free_output_buffers_.pop_back();
-    HANDLE completion_event = free_events_.back();
-    free_events_.pop_back();
+    HANDLE completion_event = nullptr;
+    if (kUseAsyncEncoding) {
+        completion_event = free_events_.back();
+        free_events_.pop_back();
+    }
 
     // イベントを未シグナル状態にリセット
-    ResetEvent(completion_event);
+    if (completion_event) {
+        ResetEvent(completion_event);
+    }
 
     // 1. テクスチャの登録 (またはキャッシュ取得)
     void* registered_res = RegisterResource(texture);
@@ -409,7 +422,9 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
         std::printf("[NvencEncoder] RegisterResource 失敗\n");
         std::fflush(stdout);
         free_output_buffers_.push_back(output_buffer);
-        free_events_.push_back(completion_event);
+        if (completion_event) {
+            free_events_.push_back(completion_event);
+        }
         return -1;
     }
 
@@ -423,7 +438,9 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
         LOG_NVENC_ERR("nvEncMapInputResource", status);
         std::fflush(stdout);
         free_output_buffers_.push_back(output_buffer);
-        free_events_.push_back(completion_event);
+        if (completion_event) {
+            free_events_.push_back(completion_event);
+        }
         return -1;
     }
 
@@ -453,7 +470,9 @@ int NvencEncoder::SubmitFrame(ID3D11Texture2D* texture, bool force_idr) {
         std::fflush(stdout);
         nv_api_.nvEncUnmapInputResource(encoder_handle_, map_params.mappedResource);
         free_output_buffers_.push_back(output_buffer);
-        free_events_.push_back(completion_event);
+        if (completion_event) {
+            free_events_.push_back(completion_event);
+        }
         return -1;
     }
 
@@ -499,7 +518,9 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
         wait_ms = static_cast<DWORD>(std::min<uint64_t>(timeout_us / 1000, INFINITE - 1));
     }
 
-    DWORD result = WaitForSingleObject(job.completion_event, wait_ms);
+    DWORD result = job.completion_event
+        ? WaitForSingleObject(job.completion_event, wait_ms)
+        : WAIT_OBJECT_0;
     if (result != WAIT_OBJECT_0) {
         if (result == WAIT_TIMEOUT) {
             const uint64_t elapsed_us =
@@ -537,7 +558,7 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
         NV_ENC_LOCK_BITSTREAM lock_params{};
         lock_params.version = NV_ENC_LOCK_BITSTREAM_VER;
         lock_params.outputBitstream = job.output_buffer;
-        lock_params.doNotWait = 1;
+        lock_params.doNotWait = job.completion_event ? 1 : 0;
 
         const NVENCSTATUS status =
             nv_api_.nvEncLockBitstream(encoder_handle_, &lock_params);
@@ -564,10 +585,20 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
     }
 
     if (!bitstream_locked) {
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        free_output_buffers_.push_back(job.output_buffer);
-        free_events_.push_back(job.completion_event);
-        return false;
+        {
+            std::lock_guard<std::mutex> lock(jobs_mutex_);
+            free_output_buffers_.push_back(job.output_buffer);
+            if (job.completion_event) {
+                free_events_.push_back(job.completion_event);
+            }
+        }
+        // Report the failed frame as consumed so FramePipeline can release
+        // its texture and submitted-frame entry instead of deadlocking once
+        // the in-flight limit is reached.
+        *out_texture = job.texture;
+        *out_frame_id = job.frame_id;
+        out_bitstream.clear();
+        return true;
     }
 
     *out_texture = job.texture;
@@ -576,7 +607,9 @@ bool NvencEncoder::GetCompletedFrame(std::vector<uint8_t>& out_bitstream,
     // リソースをプールに戻す
     std::lock_guard<std::mutex> lock(jobs_mutex_);
     free_output_buffers_.push_back(job.output_buffer);
-    free_events_.push_back(job.completion_event);
+    if (job.completion_event) {
+        free_events_.push_back(job.completion_event);
+    }
 
     return true;
 }

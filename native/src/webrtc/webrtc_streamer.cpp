@@ -22,13 +22,26 @@ constexpr char kInputChannelLabel[] = "input";
 
 class WebrtcStreamer::Impl {
 public:
+    struct CallbackContext {
+        std::mutex mutex;
+        LocalDescriptionCallback local_description;
+        LocalCandidateCallback local_candidate;
+        MessageCallback message;
+        StateChangeCallback state_change;
+        KeyFrameRequestCallback keyframe_request;
+        BitrateRecommendationCallback bitrate_recommendation;
+        std::atomic<bool> active{false};
+        std::atomic<bool> connected{false};
+    };
+
     ~Impl() {
-        Shutdown();
+        Shutdown(true);
     }
 
     bool Initialize() {
         Shutdown();
         first_video_timestamp_us_ = 0;
+        callback_context_->active.store(true, std::memory_order_release);
 
         try {
             rtc::InitLogger(rtc::LogLevel::Info);
@@ -59,8 +72,22 @@ public:
         }
     }
 
-    void Shutdown() {
-        connected_.store(false, std::memory_order_release);
+    void Shutdown(bool clear_callbacks = false) {
+        callback_context_->active.store(false, std::memory_order_release);
+        callback_context_->connected.store(false, std::memory_order_release);
+        {
+            // Callback invocation also holds this mutex. Acquiring it here
+            // waits for in-flight callbacks before their owners are destroyed.
+            std::lock_guard<std::mutex> lock(callback_context_->mutex);
+            if (clear_callbacks) {
+                callback_context_->local_description = {};
+                callback_context_->local_candidate = {};
+                callback_context_->message = {};
+                callback_context_->state_change = {};
+                callback_context_->keyframe_request = {};
+                callback_context_->bitrate_recommendation = {};
+            }
+        }
 
         std::shared_ptr<rtc::DataChannel> data_channel;
         std::shared_ptr<rtc::PeerConnection> peer_connection;
@@ -118,7 +145,7 @@ public:
         size_t size,
         uint64_t timestamp_us) {
         if (!data || size == 0 ||
-            !connected_.load(std::memory_order_acquire)) {
+            !callback_context_->connected.load(std::memory_order_acquire)) {
             return false;
         }
 
@@ -176,65 +203,71 @@ public:
     }
 
     bool IsConnected() const {
-        return connected_.load(std::memory_order_acquire);
+        return callback_context_->connected.load(std::memory_order_acquire);
     }
 
     void SetLocalDescriptionCallback(LocalDescriptionCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        local_description_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->local_description = std::move(callback);
     }
 
     void SetLocalCandidateCallback(LocalCandidateCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        local_candidate_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->local_candidate = std::move(callback);
     }
 
     void SetMessageCallback(MessageCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        message_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->message = std::move(callback);
     }
 
     void SetStateChangeCallback(StateChangeCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        state_change_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->state_change = std::move(callback);
     }
 
     void SetKeyFrameRequestCallback(KeyFrameRequestCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        keyframe_request_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->keyframe_request = std::move(callback);
     }
 
     void SetBitrateRecommendationCallback(
         BitrateRecommendationCallback callback) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        bitrate_recommendation_callback_ = std::move(callback);
+        std::lock_guard<std::mutex> lock(callback_context_->mutex);
+        callback_context_->bitrate_recommendation = std::move(callback);
     }
 
 private:
     void ConfigurePeerConnection(
         const std::shared_ptr<rtc::PeerConnection>& peer_connection) {
-        peer_connection->onStateChange([this](rtc::PeerConnection::State state) {
+        const auto context = callback_context_;
+        peer_connection->onStateChange([context](rtc::PeerConnection::State state) {
+            if (!context->active.load(std::memory_order_acquire)) {
+                return;
+            }
             const bool connected =
                 state == rtc::PeerConnection::State::Connected;
-            connected_.store(connected, std::memory_order_release);
+            context->connected.store(connected, std::memory_order_release);
 
-            StateChangeCallback callback;
-            {
-                std::lock_guard<std::mutex> lock(callback_mutex_);
-                callback = state_change_callback_;
-            }
-            if (callback) {
-                callback(connected);
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->state_change) {
+                context->state_change(connected);
             }
         });
 
+        std::weak_ptr<rtc::PeerConnection> weak_peer_connection =
+            peer_connection;
         peer_connection->onGatheringStateChange(
-            [this](rtc::PeerConnection::GatheringState state) {
+            [context, weak_peer_connection](
+                rtc::PeerConnection::GatheringState state) {
+                if (!context->active.load(std::memory_order_acquire)) {
+                    return;
+                }
                 if (state != rtc::PeerConnection::GatheringState::Complete) {
                     return;
                 }
 
-                auto peer_connection = GetPeerConnection();
+                auto peer_connection = weak_peer_connection.lock();
                 if (!peer_connection) {
                     return;
                 }
@@ -243,36 +276,32 @@ private:
                     return;
                 }
 
-                LocalDescriptionCallback callback;
-                {
-                    std::lock_guard<std::mutex> lock(callback_mutex_);
-                    callback = local_description_callback_;
-                }
-                if (callback) {
-                    callback(
+                std::lock_guard<std::mutex> lock(context->mutex);
+                if (context->local_description) {
+                    context->local_description(
                         std::string(description.value()),
                         description->typeString());
                 }
             });
 
-        peer_connection->onLocalCandidate([this](rtc::Candidate candidate) {
-            LocalCandidateCallback callback;
-            {
-                std::lock_guard<std::mutex> lock(callback_mutex_);
-                callback = local_candidate_callback_;
+        peer_connection->onLocalCandidate([context](rtc::Candidate candidate) {
+            if (!context->active.load(std::memory_order_acquire)) {
+                return;
             }
-            if (callback) {
-                callback(candidate.candidate(), candidate.mid());
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->local_candidate) {
+                context->local_candidate(candidate.candidate(), candidate.mid());
             }
         });
 
         peer_connection->onDataChannel(
-            [this](std::shared_ptr<rtc::DataChannel> data_channel) {
+            [context](std::shared_ptr<rtc::DataChannel> data_channel) {
+                if (!context->active.load(std::memory_order_acquire)) {
+                    return;
+                }
                 if (data_channel->label() == kInputChannelLabel ||
                     data_channel->label() == "control") {
-                    ConfigureControlChannel(data_channel);
-                    std::lock_guard<std::mutex> lock(transport_mutex_);
-                    data_channel_ = std::move(data_channel);
+                    ConfigureControlChannel(data_channel, context);
                 }
             });
     }
@@ -299,25 +328,24 @@ private:
             std::make_shared<rtc::RtcpSrReporter>(rtp_config));
         packetizer->addToChain(
             std::make_shared<rtc::RtcpNackResponder>(kNackHistoryPackets));
-        packetizer->addToChain(std::make_shared<rtc::PliHandler>([this] {
-            KeyFrameRequestCallback callback;
-            {
-                std::lock_guard<std::mutex> lock(callback_mutex_);
-                callback = keyframe_request_callback_;
+        const auto context = callback_context_;
+        packetizer->addToChain(std::make_shared<rtc::PliHandler>([context] {
+            if (!context->active.load(std::memory_order_acquire)) {
+                return;
             }
-            if (callback) {
-                callback();
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->keyframe_request) {
+                context->keyframe_request();
             }
         }));
         packetizer->addToChain(
-            std::make_shared<rtc::RembHandler>([this](unsigned int bitrate_bps) {
-                BitrateRecommendationCallback callback;
-                {
-                    std::lock_guard<std::mutex> lock(callback_mutex_);
-                    callback = bitrate_recommendation_callback_;
+            std::make_shared<rtc::RembHandler>([context](unsigned int bitrate_bps) {
+                if (!context->active.load(std::memory_order_acquire)) {
+                    return;
                 }
-                if (callback && bitrate_bps > 0) {
-                    callback(bitrate_bps);
+                std::lock_guard<std::mutex> lock(context->mutex);
+                if (context->bitrate_recommendation && bitrate_bps > 0) {
+                    context->bitrate_recommendation(bitrate_bps);
                 }
             }));
         video_track->setMediaHandler(packetizer);
@@ -330,14 +358,15 @@ private:
         const std::shared_ptr<rtc::PeerConnection>& peer_connection) {
         auto data_channel =
             peer_connection->createDataChannel(kInputChannelLabel);
-        ConfigureControlChannel(data_channel);
+        ConfigureControlChannel(data_channel, callback_context_);
 
         std::lock_guard<std::mutex> lock(transport_mutex_);
         data_channel_ = std::move(data_channel);
     }
 
-    void ConfigureControlChannel(
-        const std::shared_ptr<rtc::DataChannel>& data_channel) {
+    static void ConfigureControlChannel(
+        const std::shared_ptr<rtc::DataChannel>& data_channel,
+        const std::shared_ptr<CallbackContext>& context) {
         const std::string label = data_channel->label();
         data_channel->onOpen([label] {
             std::printf(
@@ -351,18 +380,17 @@ private:
                 label.c_str());
             std::fflush(stdout);
         });
-        data_channel->onMessage([this](rtc::message_variant message) {
+        data_channel->onMessage([context](rtc::message_variant message) {
+            if (!context->active.load(std::memory_order_acquire)) {
+                return;
+            }
             if (!std::holds_alternative<std::string>(message)) {
                 return;
             }
 
-            MessageCallback callback;
-            {
-                std::lock_guard<std::mutex> lock(callback_mutex_);
-                callback = message_callback_;
-            }
-            if (callback) {
-                callback(std::get<std::string>(message));
+            std::lock_guard<std::mutex> lock(context->mutex);
+            if (context->message) {
+                context->message(std::get<std::string>(message));
             }
         });
     }
@@ -377,15 +405,8 @@ private:
     std::shared_ptr<rtc::Track> video_track_;
     std::shared_ptr<rtc::DataChannel> data_channel_;
 
-    mutable std::mutex callback_mutex_;
-    LocalDescriptionCallback local_description_callback_;
-    LocalCandidateCallback local_candidate_callback_;
-    MessageCallback message_callback_;
-    StateChangeCallback state_change_callback_;
-    KeyFrameRequestCallback keyframe_request_callback_;
-    BitrateRecommendationCallback bitrate_recommendation_callback_;
-
-    std::atomic<bool> connected_{false};
+    std::shared_ptr<CallbackContext> callback_context_ =
+        std::make_shared<CallbackContext>();
     uint64_t first_video_timestamp_us_ = 0;
 };
 
@@ -399,7 +420,7 @@ bool WebrtcStreamer::Initialize() {
 }
 
 void WebrtcStreamer::Shutdown() {
-    impl_->Shutdown();
+    impl_->Shutdown(true);
 }
 
 void WebrtcStreamer::SetLocalDescriptionCallback(

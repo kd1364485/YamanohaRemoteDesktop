@@ -7,8 +7,6 @@
 #include "gpu/d3d11_device.h"
 #include "pipeline/adaptive_bitrate_controller.h"
 #include "pipeline/blocking_queue.h"
-#include "webrtc/webrtc_streamer.h"
-
 #include <d3d11.h>
 #include <wrl/client.h>
 
@@ -22,6 +20,8 @@
 #include <unordered_map>
 #include <vector>
 
+class WebrtcStreamer;
+
 namespace yamanoha {
 
 class FramePipeline {
@@ -34,18 +34,19 @@ public:
     FramePipeline(FramePipeline&&) = delete;
     FramePipeline& operator=(FramePipeline&&) = delete;
 
-    bool Start(const Display& display, int fps, int bitrate_kbps);
+    bool Start(const Display& display, int fps, int bitrate_kbps,
+               WebrtcStreamer* streamer);
     void StartThreads();
     void Stop();
 
     [[nodiscard]] bool IsRunning() const {
         return running_.load(std::memory_order_acquire);
     }
-    [[nodiscard]] WebrtcStreamer* GetStreamer() const {
-        return streamer_.get();
-    }
     [[nodiscard]] uint32_t GetWidth() const;
     [[nodiscard]] uint32_t GetHeight() const;
+
+    void RequestKeyFrame();
+    void OnBitrateEstimate(uint32_t bitrate_bps);
 
 private:
     struct SubmittedFrame {
@@ -62,7 +63,6 @@ private:
     bool InitializeEncoderDevice(const Display& display);
     bool CreateTransferTextures(uint32_t width, uint32_t height);
     bool InitializeEncoder(uint32_t width, uint32_t height, int bitrate_kbps);
-    void ConfigureStreamerCallbacks();
     void ReleaseResources();
 
     void CaptureLoop();
@@ -77,7 +77,6 @@ private:
 
     bool IsBacklogged() const;
     void ApplyBitrateRecommendation();
-    void RequestKeyFrame();
 
     std::optional<SubmittedFrame> RemoveSubmittedFrame(int frame_id);
     void ClearSubmittedFrames();
@@ -86,7 +85,7 @@ private:
     std::unique_ptr<CaptureEngine> capture_engine_;
     std::unique_ptr<D3D11DeviceManager> encode_device_manager_;
     std::unique_ptr<NvencEncoder> encoder_;
-    std::unique_ptr<WebrtcStreamer> streamer_;
+    WebrtcStreamer* streamer_ = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture_;
     std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> encode_textures_;

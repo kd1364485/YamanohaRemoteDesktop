@@ -229,7 +229,6 @@ async fn start_host(
                                         selected.height
                                     );
 
-                                    let _ = ffi::stop_stream();
                                     adapter_idx = selected.adapter_index;
                                     output_idx = selected.output_index;
                                     w = selected.width as i32;
@@ -241,7 +240,7 @@ async fn start_host(
                                         display_list_message(&displays, &current_id)
                                     )).await;
 
-                                    if let Err(e) = ffi::start_stream(
+                                    if let Err(e) = ffi::switch_display(
                                         adapter_idx,
                                         output_idx,
                                         w,

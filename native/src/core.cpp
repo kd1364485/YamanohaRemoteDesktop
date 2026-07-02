@@ -10,6 +10,7 @@
 #include "capture/display_manager.h"
 #include "encoder/nvenc_encoder.h"
 #include "pipeline/frame_pipeline.h"
+#include "pipeline/display_session_manager.h"
 #include "webrtc/webrtc_streamer.h"
 
 #include <cstdio>
@@ -49,10 +50,10 @@ YamanohaLocalCandidateCallback g_candidate_cb = nullptr;
 YamanohaMessageCallback g_message_cb = nullptr;
 YamanohaStateChangeCallback g_state_cb = nullptr;
 
-// 非同期配信パイプラインインスタンス
-// FramePipeline は CaptureThread / EncoderThread / SenderThread の3スレッドで
-// キャプチャ・コピー・エンコード・送信を非同期に並列実行する。
-std::unique_ptr<FramePipeline> g_frame_pipeline;
+// 非同期配信セッションマネージャ
+// DisplaySessionManager は WebrtcStreamer のライフサイクルを
+// ディスプレイ切替時にも維持し、FramePipeline のみ再構築する。
+std::unique_ptr<DisplaySessionManager> g_session_manager;
 
 // 配信中フラグ
 std::atomic<bool> g_is_streaming{false};
@@ -145,10 +146,10 @@ void StopStreamInternal() {
     // 配信停止フラグ設定
     g_is_streaming = false;
 
-    // 非同期パイプラインの停止（スレッド終了も内部で行う）
-    if (g_frame_pipeline) {
-        g_frame_pipeline->Stop();
-        g_frame_pipeline.reset();
+    // セッションマネージャの停止（パイプライン + ストリーマー）
+    if (g_session_manager) {
+        g_session_manager->Stop();
+        g_session_manager.reset();
     }
 
     std::printf("[Core] ストリーミング配信を停止しました\n");
@@ -291,18 +292,18 @@ YAMANOHA_API int yamanoha_start_stream(
         }
     }
 
-    // 3. 非同期フレームパイプラインを作成して開始する
-    g_frame_pipeline = std::make_unique<FramePipeline>();
+    // 3. DisplaySessionManager を作成して開始する
+    g_session_manager = std::make_unique<DisplaySessionManager>();
 
     if (target_display) {
-        std::printf("[Core] FramePipeline 開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
+        std::printf("[Core] DisplaySessionManager 開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
                     target_display->display_id.c_str(),
                     target_display->adapter_index,
                     target_display->output_index);
-        if (g_frame_pipeline->Start(*target_display, fps, bitrate_kbps)) {
-            std::printf("[Core] 指定アダプタ/出力で FramePipeline 開始に成功\n");
+        if (g_session_manager->Start(*target_display, fps, bitrate_kbps)) {
+            std::printf("[Core] 指定アダプタ/出力でセッション開始に成功\n");
         } else {
-            std::printf("[Core] 指定アダプタ/出力での FramePipeline 開始に失敗。他のディスプレイを試行します\n");
+            std::printf("[Core] 指定アダプタ/出力でのセッション開始に失敗。他のディスプレイを試行します\n");
             target_display = nullptr;
         }
     }
@@ -310,34 +311,33 @@ YAMANOHA_API int yamanoha_start_stream(
     // 指定アダプタで失敗した場合、他のディスプレイを試行する
     if (!target_display) {
         for (const auto& display : display_manager.GetDisplays()) {
-            // 指定アダプタは既に試した
             if (display.adapter_index == adapter_index && display.output_index == output_index) {
                 continue;
             }
 
-            std::printf("[Core] 代替ディスプレイで FramePipeline 開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
+            std::printf("[Core] 代替ディスプレイでセッション開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
                         display.display_id.c_str(),
                         display.adapter_index,
                         display.output_index);
-            if (g_frame_pipeline->Start(display, fps, bitrate_kbps)) {
+            if (g_session_manager->Start(display, fps, bitrate_kbps)) {
                 target_display = &display;
-                std::printf("[Core] 代替ディスプレイで FramePipeline 開始に成功\n");
+                std::printf("[Core] 代替ディスプレイでセッション開始に成功\n");
                 break;
             }
         }
     }
 
     if (!target_display) {
-        std::printf("[Core] FramePipeline の開始に失敗しました\n");
-        g_frame_pipeline.reset();
+        std::printf("[Core] DisplaySessionManager の開始に失敗しました\n");
+        g_session_manager.reset();
         return -4;
     }
 
     // 4. WebRTC ストリーマーへコールバックを設定して初期化
-    auto* streamer = g_frame_pipeline->GetStreamer();
+    auto* streamer = g_session_manager->GetStreamer();
     if (!streamer) {
         std::printf("[Core] FramePipeline からストリーマーが取得できません\n");
-        g_frame_pipeline.reset();
+        g_session_manager.reset();
         return -5;
     }
 
@@ -367,19 +367,19 @@ YAMANOHA_API int yamanoha_start_stream(
 
     if (!streamer->Initialize()) {
         std::printf("[Core] WebrtcStreamer 初期化失敗\n");
-        g_frame_pipeline.reset();
+        g_session_manager.reset();
         return -6;
     }
 
     // 5. 非同期パイプラインスレッド開始
-    g_frame_pipeline->StartThreads();
+    g_session_manager->GetPipeline()->StartThreads();
 
     // 6. 配信開始
     g_is_streaming = true;
 
     std::printf("[Core] ストリーミング配信の起動に成功しました (配信元: %u x %u, %d FPS)\n",
-                g_frame_pipeline->GetWidth(),
-                g_frame_pipeline->GetHeight(),
+                g_session_manager->GetWidth(),
+                g_session_manager->GetHeight(),
                 fps);
     std::fflush(stdout);
     return 0;
@@ -394,11 +394,11 @@ YAMANOHA_API int yamanoha_process_signaling(
     const char* mid
 ) {
     std::lock_guard<std::mutex> lock(g_engine.mutex);
-    if (!g_frame_pipeline || !msg_type || !sdp_or_candidate) {
+    if (!g_session_manager || !msg_type || !sdp_or_candidate) {
         return 0;
     }
 
-    auto* streamer = g_frame_pipeline->GetStreamer();
+    auto* streamer = g_session_manager->GetStreamer();
     if (!streamer) {
         return 0;
     }
@@ -416,11 +416,11 @@ YAMANOHA_API int yamanoha_process_signaling(
 // ---------------------------------------------------------------------------
 YAMANOHA_API int yamanoha_send_message(const char* message) {
     std::lock_guard<std::mutex> lock(g_engine.mutex);
-    if (!g_frame_pipeline || !message) {
+    if (!g_session_manager || !message) {
         return 0;
     }
 
-    auto* streamer = g_frame_pipeline->GetStreamer();
+    auto* streamer = g_session_manager->GetStreamer();
     if (!streamer) {
         return 0;
     }
@@ -428,6 +428,61 @@ YAMANOHA_API int yamanoha_send_message(const char* message) {
     std::string msg_str(message);
     bool success = streamer->SendMessageOverDataChannel(msg_str);
     return success ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// ディスプレイ切替（WebRTC接続維持）
+// ---------------------------------------------------------------------------
+YAMANOHA_API int yamanoha_switch_display(
+    int adapter_index,
+    int output_index,
+    int width,
+    int height,
+    int fps,
+    int bitrate_kbps
+) {
+    std::lock_guard<std::mutex> lock(g_engine.mutex);
+
+    if (!g_session_manager) {
+        std::printf("[Core] セッションが存在しません\n");
+        return -1;
+    }
+
+    DisplayManager display_manager;
+    if (!display_manager.Refresh()) {
+        std::printf("[Core] ディスプレイ列挙に失敗しました\n");
+        return -2;
+    }
+
+    const Display* target_display = nullptr;
+    for (const auto& display : display_manager.GetDisplays()) {
+        if (display.adapter_index == adapter_index &&
+            display.output_index == output_index) {
+            target_display = &display;
+            break;
+        }
+    }
+
+    if (!target_display) {
+        std::printf("[Core] 指定されたディスプレイが見つかりません (Adapter=%d, Output=%d)\n",
+                    adapter_index, output_index);
+        return -3;
+    }
+
+    std::printf("[Core] ディスプレイ切替: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
+                target_display->display_id.c_str(),
+                target_display->adapter_index,
+                target_display->output_index);
+
+    if (!g_session_manager->SwitchDisplay(*target_display, fps, bitrate_kbps)) {
+        std::printf("[Core] ディスプレイ切替に失敗しました\n");
+        return -4;
+    }
+
+    std::printf("[Core] ディスプレイ切替に成功 (%u x %u)\n",
+                g_session_manager->GetWidth(),
+                g_session_manager->GetHeight());
+    return 0;
 }
 
 } // extern "C"

@@ -1,4 +1,5 @@
 #include "pipeline/frame_pipeline.h"
+#include "webrtc/webrtc_streamer.h"
 
 #include <algorithm>
 #include <chrono>
@@ -35,8 +36,10 @@ FramePipeline::~FramePipeline() {
 bool FramePipeline::Start(
     const Display& display,
     int fps,
-    int bitrate_kbps) {
+    int bitrate_kbps,
+    WebrtcStreamer* streamer) {
     Stop();
+    streamer_ = streamer;
     if (fps <= 0 || bitrate_kbps <= 0) {
         std::printf("[FramePipeline] invalid fps or bitrate\n");
         return false;
@@ -71,8 +74,6 @@ bool FramePipeline::Start(
         return false;
     }
 
-    streamer_ = std::make_unique<WebrtcStreamer>();
-    ConfigureStreamerCallbacks();
     encoded_frames_.Reset();
     prepared_ = true;
 
@@ -234,22 +235,9 @@ bool FramePipeline::InitializeEncoder(
     return false;
 }
 
-void FramePipeline::ConfigureStreamerCallbacks() {
-    streamer_->SetKeyFrameRequestCallback([this] {
-        RequestKeyFrame();
-    });
-    streamer_->SetBitrateRecommendationCallback(
-        [this](uint32_t bitrate_bps) {
-            bitrate_controller_.OnReceiverEstimate(bitrate_bps);
-        });
-}
-
 void FramePipeline::ReleaseResources() {
     prepared_ = false;
-    if (streamer_) {
-        streamer_->Shutdown();
-        streamer_.reset();
-    }
+    streamer_ = nullptr;
     if (encoder_) {
         encoder_->Shutdown();
         encoder_.reset();
@@ -626,6 +614,10 @@ void FramePipeline::ApplyBitrateRecommendation() {
 
 void FramePipeline::RequestKeyFrame() {
     force_key_frame_.store(true, std::memory_order_release);
+}
+
+void FramePipeline::OnBitrateEstimate(uint32_t bitrate_bps) {
+    bitrate_controller_.OnReceiverEstimate(bitrate_bps);
 }
 
 std::optional<FramePipeline::SubmittedFrame>

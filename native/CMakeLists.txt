@@ -81,6 +81,7 @@ add_library(yamanoha_core SHARED
     src/encoder/nvenc_encoder.cpp
     src/pipeline/adaptive_bitrate_controller.cpp
     src/pipeline/frame_pipeline.cpp
+    src/pipeline/display_session_manager.cpp
     src/webrtc/webrtc_streamer.cpp
 )
 target_include_directories(yamanoha_core PUBLIC src PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

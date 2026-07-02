@@ -98,6 +98,23 @@ YAMANOHA_API int yamanoha_start_stream(
     int bitrate_kbps
 );
 
+/// @brief 配信中のディスプレイを切り替える（WebRTC接続は維持）
+/// @param adapter_index 切り替え先GPUアダプタインデックス
+/// @param output_index 切り替え先ディスプレイ出力インデックス
+/// @param width 切り替え先解像度（幅）
+/// @param height 切り替え先解像度（高さ）
+/// @param fps 配信フレームレート
+/// @param bitrate_kbps 目標ビットレート (kbps)
+/// @return 成功時 0、失敗時 負のエラーコード
+YAMANOHA_API int yamanoha_switch_display(
+    int adapter_index,
+    int output_index,
+    int width,
+    int height,
+    int fps,
+    int bitrate_kbps
+);
+
 /// @brief キャプチャ・エンコード・WebRTC配信パイプラインを停止する
 /// @return 成功時 0
 YAMANOHA_API int yamanoha_stop_stream();

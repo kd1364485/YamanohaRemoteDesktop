@@ -150,6 +150,15 @@ extern "C" {
         bitrate_kbps: c_int
     ) -> c_int;
 
+    fn yamanoha_switch_display(
+        adapter_index: c_int,
+        output_index: c_int,
+        width: c_int,
+        height: c_int,
+        fps: c_int,
+        bitrate_kbps: c_int
+    ) -> c_int;
+
     fn yamanoha_stop_stream() -> c_int;
 
     fn yamanoha_process_signaling(
@@ -259,6 +268,30 @@ pub fn stop_stream() -> Result<(), String> {
     let res = unsafe { yamanoha_stop_stream() };
     if res != 0 {
         return Err(format!("Failed to stop stream: {}", res));
+    }
+    Ok(())
+}
+
+pub fn switch_display(
+    adapter_index: i32,
+    output_index: i32,
+    width: i32,
+    height: i32,
+    fps: i32,
+    bitrate_kbps: i32
+) -> Result<(), String> {
+    let res = unsafe {
+        yamanoha_switch_display(
+            adapter_index as c_int,
+            output_index as c_int,
+            width as c_int,
+            height as c_int,
+            fps as c_int,
+            bitrate_kbps as c_int
+        )
+    };
+    if res != 0 {
+        return Err(format!("Failed to switch display: {}", res));
     }
     Ok(())
 }

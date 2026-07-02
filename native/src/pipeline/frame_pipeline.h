@@ -4,6 +4,8 @@
 #include "capture/cursor_cpu_compositor.h"
 #include "capture/display_manager.h"
 #include "encoder/nvenc_encoder.h"
+#include "encoder/mf_encoder.h"
+#include "encoder/video_encoder.h"
 #include "gpu/d3d11_device.h"
 #include "pipeline/adaptive_bitrate_controller.h"
 #include "pipeline/blocking_queue.h"
@@ -96,7 +98,7 @@ private:
 
     std::unique_ptr<CaptureEngine> capture_engine_;
     std::unique_ptr<D3D11DeviceManager> encode_device_manager_;
-    std::unique_ptr<NvencEncoder> encoder_;
+    std::unique_ptr<VideoEncoder> encoder_;
     WebrtcStreamer* streamer_ = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture_;

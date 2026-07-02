@@ -5,6 +5,7 @@
 #pragma once
 
 #include "encoder_config.h"
+#include "video_encoder.h"
 #include "third_party/nvcodec/nvEncodeAPI.h"
 
 #include <d3d11.h>
@@ -22,7 +23,7 @@ using Microsoft::WRL::ComPtr;
 namespace yamanoha {
 
 /// @brief NVENC を使用して GPU 上の ID3D11Texture2D から直接 H.264 ストリームを生成するクラス
-class NvencEncoder {
+class NvencEncoder : public VideoEncoder {
 public:
     NvencEncoder();
     ~NvencEncoder();
@@ -37,13 +38,13 @@ public:
     /// @param device D3D11デバイス。NVENC セッションはこのデバイスに関連付けられます。
     /// @param config エンコード設定
     /// @return 成功時 true
-    bool Initialize(ID3D11Device* device, const EncoderConfig& config);
+    bool Initialize(ID3D11Device* device, const EncoderConfig& config) override;
 
     /// @brief フレームをエンコーダに投入する（非同期）
     /// @param texture エンコード対象の D3D11テクスチャ (BGRA8)
     /// @param force_idr キーフレーム生成を強制するかどうか
     /// @return 成功時はフレームID（正の値）、失敗時は -1
-    int SubmitFrame(ID3D11Texture2D* texture, bool force_idr);
+    int SubmitFrame(ID3D11Texture2D* texture, bool force_idr) override;
 
     /// @brief 次に完了したエンコードフレームを取得する（非同期）
     /// @param out_bitstream エンコード結果の NAL ユニットデータ格納先
@@ -51,7 +52,7 @@ public:
     /// @param out_frame_id 完了したフレームIDを返す
     /// @param timeout_us 待機タイムアウト（0はポーリング、UINT64_MAXは無限）
     /// @return 完了フレームが取得できた場合 true
-    bool GetCompletedFrame(std::vector<uint8_t>& out_bitstream, ID3D11Texture2D** out_texture, int* out_frame_id, uint64_t timeout_us);
+    bool GetCompletedFrame(std::vector<uint8_t>& out_bitstream, ID3D11Texture2D** out_texture, int* out_frame_id, uint64_t timeout_us) override;
 
     /// @brief フレームをエンコードする（同期ラッパー、後方互換）
     /// @param texture エンコード対象の D3D11テクスチャ (BGRA8)
@@ -63,17 +64,17 @@ public:
     /// @brief バッファに残っているフレームをフラッシュする（ストリーミング終了時）
     /// @param out_bitstream フラッシュされたビットストリームデータ
     /// @return 成功時 true
-    bool Flush(std::vector<uint8_t>& out_bitstream);
+    bool Flush(std::vector<uint8_t>& out_bitstream) override;
 
     /// @brief 実行中のセッションのビットレートを変更する
-    bool ReconfigureBitrate(uint32_t bitrate_kbps);
+    bool ReconfigureBitrate(uint32_t bitrate_kbps) override;
 
     /// @brief 全リソースを解放する
-    void Shutdown();
+    void Shutdown() override;
 
-    [[nodiscard]] bool IsInitialized() const { return initialized_; }
-    [[nodiscard]] uint32_t GetWidth() const { return width_; }
-    [[nodiscard]] uint32_t GetHeight() const { return height_; }
+    [[nodiscard]] bool IsInitialized() const override { return initialized_; }
+    [[nodiscard]] uint32_t GetWidth() const override { return width_; }
+    [[nodiscard]] uint32_t GetHeight() const override { return height_; }
 
 private:
     // NVENC APIテーブルを DLL から動的ロードする

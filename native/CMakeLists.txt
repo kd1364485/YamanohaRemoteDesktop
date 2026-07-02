@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Windows SDK リンク
-set(LIBS d3d11 dxgi d3dcompiler dxguid dbghelp)
+set(LIBS d3d11 dxgi d3dcompiler dxguid dbghelp mfplat mfuuid)
 
 # libdatachannel (WebRTC) の依存暗号化ライブラリ MbedTLS の自動取得と構成
 include(FetchContent)
@@ -79,6 +79,7 @@ add_library(yamanoha_core SHARED
     src/capture/capture_engine.cpp
     src/capture/cursor_cpu_compositor.cpp
     src/encoder/nvenc_encoder.cpp
+    src/encoder/mf_encoder.cpp
     src/pipeline/adaptive_bitrate_controller.cpp
     src/pipeline/frame_pipeline.cpp
     src/pipeline/display_session_manager.cpp
@@ -113,6 +114,7 @@ add_executable(encode_test
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
     src/encoder/nvenc_encoder.cpp
+    src/encoder/mf_encoder.cpp
 )
 target_include_directories(encode_test PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(encode_test PRIVATE ${LIBS} datachannel)
@@ -128,6 +130,7 @@ add_executable(webrtc_test
     src/capture/desktop_duplicator.cpp
     src/capture/capture_engine.cpp
     src/encoder/nvenc_encoder.cpp
+    src/encoder/mf_encoder.cpp
     src/webrtc/webrtc_streamer.cpp
 )
 target_include_directories(webrtc_test PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})

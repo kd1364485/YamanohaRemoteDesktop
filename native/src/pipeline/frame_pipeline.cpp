@@ -226,12 +226,24 @@ bool FramePipeline::InitializeEncoder(
     config.preset = 1;
     config.gop_size = config.fps;
 
-    encoder_ = std::make_unique<NvencEncoder>();
-    if (encoder_->Initialize(encode_device_manager_->GetDevice(), config)) {
+    // 1. NVENC (NVIDIA GPU) を優先的に試行
+    auto nvenc = std::make_unique<NvencEncoder>();
+    if (nvenc->Initialize(encode_device_manager_->GetDevice(), config)) {
+        encoder_ = std::move(nvenc);
         return true;
     }
 
-    std::printf("[FramePipeline] NVENC initialization failed\n");
+    std::printf("[FramePipeline] NVENC initialization failed, trying Media Foundation encoder\n");
+    nvenc.reset();
+
+    // 2. Media Foundation (Intel QuickSync / AMD AMF / ソフトウェア) にフォールバック
+    auto mf = std::make_unique<MfEncoder>();
+    if (mf->Initialize(encode_device_manager_->GetDevice(), config)) {
+        encoder_ = std::move(mf);
+        return true;
+    }
+
+    std::printf("[FramePipeline] Media Foundation encoder initialization failed\n");
     encoder_.reset();
     return false;
 }

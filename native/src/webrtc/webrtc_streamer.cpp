@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <utility>
 
@@ -50,6 +51,15 @@ public:
             configuration.iceServers.emplace_back("stun:stun.l.google.com:19302");
             configuration.iceServers.emplace_back("stun:stun1.l.google.com:19302");
             configuration.iceServers.emplace_back("stun:stun2.l.google.com:19302");
+
+            // TURN server (NAT traversal for restrictive networks)
+            // Configurable via environment variable YAMANOHA_TURN_SERVER
+            // Format: "turn:host:port:username:credential" or "turns:host:port:username:credential"
+            if (const char* turn_env = std::getenv("YAMANOHA_TURN_SERVER")) {
+                std::string turn_str(turn_env);
+                std::printf("[WebrtcStreamer] TURN server from env: %s\n", turn_str.c_str());
+                configuration.iceServers.emplace_back(turn_str);
+            }
 
             auto peer_connection =
                 std::make_shared<rtc::PeerConnection>(configuration);

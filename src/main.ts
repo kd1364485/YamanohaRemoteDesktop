@@ -70,9 +70,32 @@ async function setupWebRTC(): Promise<void> {
   pendingIceCandidates = [];
 
   // RTCPeerConnection作成
-  pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  });
+  const iceServers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+
+  // TURN server (NAT traversal for restrictive networks)
+  // URLパラメータ ?turn=turn:host:port:username:credential で指定可能
+  const turnParam = new URLSearchParams(window.location.search).get("turn");
+  if (turnParam) {
+    const parts = turnParam.split(":");
+    if (parts.length >= 5) {
+      const proto = parts[0]; // turn or turns
+      const host = parts[1];
+      const port = parts[2];
+      const username = parts[3];
+      const credential = parts.slice(4).join(":");
+      iceServers.push({
+        urls: `${proto}:${host}:${port}`,
+        username,
+        credential,
+      });
+      console.log(`[client] TURN server configured: ${proto}:${host}:${port}`);
+    }
+  }
+
+  pc = new RTCPeerConnection({ iceServers });
   console.log("[client] RTCPeerConnection created");
 
   // ホストが作成した入力DataChannelを受信。controlは旧ネイティブ版との互換用。

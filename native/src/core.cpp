@@ -17,16 +17,12 @@
 #include <memory>
 #include <mutex>
 #include <vector>
-#include <thread>
 #include <atomic>
-#include <chrono>
 #include <algorithm>
 
-#include <wrl/client.h>
 #include <dbghelp.h>
 
 using namespace yamanoha;
-using Microsoft::WRL::ComPtr;
 
 // ===========================================================================
 // 内部グローバル状態
@@ -57,6 +53,42 @@ std::unique_ptr<DisplaySessionManager> g_session_manager;
 
 // 配信中フラグ
 std::atomic<bool> g_is_streaming{false};
+
+// ---------------------------------------------------------------------------
+// 内部ヘルパー関数
+// ---------------------------------------------------------------------------
+
+const Display* FindDisplay(
+    const std::vector<Display>& displays,
+    int adapter_index,
+    int output_index) {
+    for (const auto& display : displays) {
+        if (display.adapter_index == adapter_index &&
+            display.output_index == output_index) {
+            return &display;
+        }
+    }
+    return nullptr;
+}
+
+void SetupStreamerCallbacks(WebrtcStreamer* streamer) {
+    streamer->SetLocalDescriptionCallback(
+        [](const std::string& sdp, const std::string& type) {
+            if (g_sdp_cb) g_sdp_cb(sdp.c_str(), type.c_str());
+        });
+    streamer->SetLocalCandidateCallback(
+        [](const std::string& candidate, const std::string& mid) {
+            if (g_candidate_cb) g_candidate_cb(candidate.c_str(), mid.c_str());
+        });
+    streamer->SetMessageCallback(
+        [](const std::string& msg) {
+            if (g_message_cb) g_message_cb(msg.c_str());
+        });
+    streamer->SetStateChangeCallback(
+        [](bool connected) {
+            if (g_state_cb) g_state_cb(connected ? 1 : 0);
+        });
+}
 
 } // anonymous namespace
 
@@ -275,95 +307,62 @@ YAMANOHA_API int yamanoha_start_stream(
         StopStreamInternal();
     }
 
-    // 1. DisplayManager を使用してディスプレイ情報を取得する
+    // 1. ディスプレイ列挙
     DisplayManager display_manager;
     if (!display_manager.Refresh()) {
         std::printf("[Core] ディスプレイ列挙に失敗しました\n");
         return -2;
     }
     display_manager.PrintDisplayInfo();
+    const auto& displays = display_manager.GetDisplays();
 
-    // 2. 指定されたアダプタ/出力に対応する Display を検索する
-    const Display* target_display = nullptr;
-    for (const auto& display : display_manager.GetDisplays()) {
-        if (display.adapter_index == adapter_index && display.output_index == output_index) {
-            target_display = &display;
-            break;
-        }
-    }
+    // 2. 指定ディスプレイを検索、失敗時は代替を試行
+    const Display* target = FindDisplay(displays, adapter_index, output_index);
 
-    // 3. DisplaySessionManager を作成して開始する
     g_session_manager = std::make_unique<DisplaySessionManager>();
 
-    if (target_display) {
-        std::printf("[Core] DisplaySessionManager 開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
-                    target_display->display_id.c_str(),
-                    target_display->adapter_index,
-                    target_display->output_index);
-        if (g_session_manager->Start(*target_display, fps, bitrate_kbps)) {
-            std::printf("[Core] 指定アダプタ/出力でセッション開始に成功\n");
-        } else {
-            std::printf("[Core] 指定アダプタ/出力でのセッション開始に失敗。他のディスプレイを試行します\n");
-            target_display = nullptr;
+    if (target) {
+        std::printf("[Core] セッション開始を試行: %ls (Adapter=%d, Output=%d)\n",
+                    target->display_id.c_str(),
+                    target->adapter_index,
+                    target->output_index);
+        if (!g_session_manager->Start(*target, fps, bitrate_kbps)) {
+            target = nullptr;
         }
     }
 
-    // 指定アダプタで失敗した場合、他のディスプレイを試行する
-    if (!target_display) {
-        for (const auto& display : display_manager.GetDisplays()) {
-            if (display.adapter_index == adapter_index && display.output_index == output_index) {
+    if (!target) {
+        for (const auto& display : displays) {
+            if (display.adapter_index == adapter_index &&
+                display.output_index == output_index) {
                 continue;
             }
-
-            std::printf("[Core] 代替ディスプレイでセッション開始を試行: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
+            std::printf("[Core] 代替ディスプレイで試行: %ls (Adapter=%d, Output=%d)\n",
                         display.display_id.c_str(),
                         display.adapter_index,
                         display.output_index);
             if (g_session_manager->Start(display, fps, bitrate_kbps)) {
-                target_display = &display;
-                std::printf("[Core] 代替ディスプレイでセッション開始に成功\n");
+                target = &display;
                 break;
             }
         }
     }
 
-    if (!target_display) {
-        std::printf("[Core] DisplaySessionManager の開始に失敗しました\n");
+    if (!target) {
+        std::printf("[Core] セッション開始に失敗しました\n");
         g_session_manager.reset();
         return -4;
     }
 
-    // 4. WebRTC ストリーマーへコールバックを設定して初期化
+    // 3. WebRTC ストリーマーの初期化
     auto* streamer = g_session_manager->GetStreamer();
     if (!streamer) {
-        std::printf("[Core] FramePipeline からストリーマーが取得できません\n");
+        std::printf("[Core] ストリーマーが取得できません\n");
         g_session_manager.reset();
         return -5;
     }
 
-    streamer->SetLocalDescriptionCallback([](const std::string& sdp, const std::string& type) {
-        if (g_sdp_cb) {
-            g_sdp_cb(sdp.c_str(), type.c_str());
-        }
-    });
-
-    streamer->SetLocalCandidateCallback([](const std::string& candidate, const std::string& mid) {
-        if (g_candidate_cb) {
-            g_candidate_cb(candidate.c_str(), mid.c_str());
-        }
-    });
-
-    streamer->SetMessageCallback([](const std::string& msg) {
-        if (g_message_cb) {
-            g_message_cb(msg.c_str());
-        }
-    });
-
-    streamer->SetStateChangeCallback([](bool connected) {
-        if (g_state_cb) {
-            g_state_cb(connected ? 1 : 0);
-        }
-    });
+    SetupStreamerCallbacks(streamer);
 
     if (!streamer->Initialize()) {
         std::printf("[Core] WebrtcStreamer 初期化失敗\n");
@@ -371,13 +370,11 @@ YAMANOHA_API int yamanoha_start_stream(
         return -6;
     }
 
-    // 5. 非同期パイプラインスレッド開始
+    // 4. パイプラインスレッド開始
     g_session_manager->GetPipeline()->StartThreads();
-
-    // 6. 配信開始
     g_is_streaming = true;
 
-    std::printf("[Core] ストリーミング配信の起動に成功しました (配信元: %u x %u, %d FPS)\n",
+    std::printf("[Core] 配信開始 (%u x %u, %d FPS)\n",
                 g_session_manager->GetWidth(),
                 g_session_manager->GetHeight(),
                 fps);
@@ -454,32 +451,25 @@ YAMANOHA_API int yamanoha_switch_display(
         return -2;
     }
 
-    const Display* target_display = nullptr;
-    for (const auto& display : display_manager.GetDisplays()) {
-        if (display.adapter_index == adapter_index &&
-            display.output_index == output_index) {
-            target_display = &display;
-            break;
-        }
-    }
-
-    if (!target_display) {
-        std::printf("[Core] 指定されたディスプレイが見つかりません (Adapter=%d, Output=%d)\n",
+    const Display* target = FindDisplay(
+        display_manager.GetDisplays(), adapter_index, output_index);
+    if (!target) {
+        std::printf("[Core] ディスプレイが見つかりません (Adapter=%d, Output=%d)\n",
                     adapter_index, output_index);
         return -3;
     }
 
-    std::printf("[Core] ディスプレイ切替: %ls (AdapterIndex=%d, OutputIndex=%d)\n",
-                target_display->display_id.c_str(),
-                target_display->adapter_index,
-                target_display->output_index);
+    std::printf("[Core] ディスプレイ切替: %ls (Adapter=%d, Output=%d)\n",
+                target->display_id.c_str(),
+                target->adapter_index,
+                target->output_index);
 
-    if (!g_session_manager->SwitchDisplay(*target_display, fps, bitrate_kbps)) {
+    if (!g_session_manager->SwitchDisplay(*target, fps, bitrate_kbps)) {
         std::printf("[Core] ディスプレイ切替に失敗しました\n");
         return -4;
     }
 
-    std::printf("[Core] ディスプレイ切替に成功 (%u x %u)\n",
+    std::printf("[Core] ディスプレイ切替成功 (%u x %u)\n",
                 g_session_manager->GetWidth(),
                 g_session_manager->GetHeight());
     return 0;

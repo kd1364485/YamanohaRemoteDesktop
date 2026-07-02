@@ -5,51 +5,25 @@ use futures_util::{StreamExt, SinkExt};
 
 mod ffi;
 mod input_control;
+mod signaling;
 
-// WebSocket接続キャンセル用のoneshot送信チャネル
-static WS_CANCEL_TX: Lazy<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
+static WS_CANCEL_TX: Lazy<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
+    Lazy::new(|| Mutex::new(None));
 
-fn display_id(display: &ffi::YamanohaDisplayInfo) -> String {
-    format!("{}:{}", display.adapter_index, display.output_index)
-}
+pub fn run() {
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![start_host, stop_host])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
 
-fn wide_string(value: &[u16]) -> String {
-    let length = value.iter().position(|&ch| ch == 0).unwrap_or(value.len());
-    String::from_utf16_lossy(&value[..length])
-}
-
-fn display_list_message(
-    displays: &[ffi::YamanohaDisplayInfo],
-    current_id: &str,
-) -> String {
-    let items: Vec<_> = displays
-        .iter()
-        .map(|display| {
-            serde_json::json!({
-                "id": display_id(display),
-                "label": wide_string(&display.name),
-                "width": display.width,
-                "height": display.height,
-                "primary": display.is_primary == 1,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "type": "display-list",
-        "displays": items,
-        "currentId": current_id,
-    })
-    .to_string()
-}
-
-fn select_input_display(display: &ffi::YamanohaDisplayInfo) {
-    input_control::set_active_display(
-        display.x,
-        display.y,
-        display.width,
-        display.height,
-    );
+    app.run(|_app, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            std::println!("[Rust] Exit requested, cleaning up...");
+            cleanup_resources();
+        }
+    });
 }
 
 #[tauri::command]
@@ -57,22 +31,18 @@ async fn start_host(
     app: tauri::AppHandle,
     server_url: String,
     token: String,
-    device_name: String
+    device_name: String,
 ) -> Result<(), String> {
-    // 既存のホストセッションがあれば一度停止
     let _ = stop_host().await;
 
-    std::println!("[Rust] ネイティブ C++ エンジン初期化開始...");
-    // 1. C++ DLLのロードとコールバック設定
+    std::println!("[Rust] Initializing native C++ engine...");
     ffi::init_engine(app)?;
 
-    // 2. ディスプレイ一覧を取得して、後段のクライアント接続時に使用する配信パラメータを決定する
     let displays = ffi::list_displays().unwrap_or_default();
     let mut adapter_idx = 0;
     let mut output_idx = 0;
     let mut w = 1920;
     let mut h = 1080;
-    // プライマリディスプレイの情報を優先適用
     if let Some(primary) = displays.iter().find(|d| d.is_primary == 1) {
         adapter_idx = primary.adapter_index;
         output_idx = primary.output_index;
@@ -88,23 +58,17 @@ async fn start_host(
         .iter()
         .find(|d| d.adapter_index == adapter_idx && d.output_index == output_idx)
     {
-        select_input_display(selected);
+        signaling::select_input_display(selected);
     }
 
     let fps = 60;
 
-    // 3. WebSocket シグナリングクライアントタスクのセットアップ
     let (ws_tx, mut ws_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     *ffi::WS_SENDER.lock().unwrap() = Some(ws_tx);
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     *WS_CANCEL_TX.lock().unwrap() = Some(cancel_tx);
 
-    let server_url_clone = server_url.clone();
-    let token_clone = token.clone();
-    let device_name_clone = device_name.clone();
-    
-    // インスタンスIDの生成 (UNIXタイムスタンプミリ秒を使用)
     let instance_id = format!(
         "inst-native-{}",
         std::time::SystemTime::now()
@@ -113,29 +77,38 @@ async fn start_host(
             .as_millis()
     );
 
-    // 非同期シグナリングループタスクの起動 (Tokio スレッド)
+    let mut ctx = signaling::SessionContext {
+        displays,
+        adapter_idx,
+        output_idx,
+        w,
+        h,
+        fps,
+        device_name,
+        instance_id,
+    };
+
     tokio::spawn(async move {
-        std::println!("[Rust WS] シグナリングサーバーに接続中: {}", server_url_clone);
-        
-        let (ws_stream, _) = match connect_async(&server_url_clone).await {
+        std::println!("[Rust WS] Connecting to signaling server: {}", server_url);
+
+        let (ws_stream, _) = match connect_async(&server_url).await {
             Ok(val) => val,
             Err(e) => {
-                std::println!("[Rust WS] シグナリングサーバーへの接続に失敗しました: {}", e);
+                std::println!("[Rust WS] Connection failed: {}", e);
                 return;
             }
         };
-        std::println!("[Rust WS] シグナリングサーバーに接続完了");
+        std::println!("[Rust WS] Connected");
 
         let (mut write, mut read) = ws_stream.split();
-        
-        // 最初のメッセージとしてシグナリング認証要求 (type: "auth") を送信
+
         let auth_msg = serde_json::json!({
             "type": "auth",
-            "token": token_clone
-        }).to_string();
-
+            "token": token
+        })
+        .to_string();
         if let Err(e) = write.send(Message::Text(auth_msg)).await {
-            std::println!("[Rust WS] 認証メッセージの送信に失敗しました: {}", e);
+            std::println!("[Rust WS] Auth send failed: {}", e);
             return;
         }
 
@@ -143,187 +116,66 @@ async fn start_host(
 
         loop {
             tokio::select! {
-                // 停止（キャンセル）通知の受信
                 _ = &mut cancel_rx => {
-                    std::println!("[Rust WS] 配信停止指示を受信しました");
+                    std::println!("[Rust WS] Stop signal received");
                     break;
                 }
-                
-                // C++ FFI コールバックから発生した送信メッセージ（SDP/ICE）の処理
+
                 Some(msg) = ws_rx.recv() => {
                     if let Err(e) = write.send(Message::Text(msg)).await {
-                        std::println!("[Rust WS] シグナリングデータの送信に失敗: {}", e);
+                        std::println!("[Rust WS] Send failed: {}", e);
                         break;
                     }
                 }
 
-                // シグナリングサーバーからの受信メッセージの処理
                 msg_res = read.next() => {
                     let msg = match msg_res {
                         Some(Ok(Message::Text(t))) => t,
                         Some(Ok(_)) => continue,
                         Some(Err(e)) => {
-                            std::println!("[Rust WS] 受信エラー: {}", e);
+                            std::println!("[Rust WS] Receive error: {}", e);
                             break;
                         }
                         None => {
-                            std::println!("[Rust WS] サーバーが切断しました");
+                            std::println!("[Rust WS] Server disconnected");
                             break;
                         }
                     };
 
-                    // メッセージをパースしてプロトコルに従った処理を行う
                     if let Ok(j) = serde_json::from_str::<serde_json::Value>(&msg) {
-                        let msg_type = j["type"].as_str().unwrap_or("");
-                        
-                        match msg_type {
-                            // 1. 認証が通ったらホストとして登録
-                            "auth-ok" => {
-                                std::println!("[Rust WS] 認証成功。ホスト登録メッセージを送信します...");
-                                let host_msg = serde_json::json!({
-                                    "type": "host",
-                                    "deviceName": device_name_clone,
-                                    "instanceId": instance_id
-                                }).to_string();
-                                let _ = write.send(Message::Text(host_msg)).await;
+                        if let Some(action) = signaling::handle_message(
+                            &j, &mut ctx, &mut write,
+                        ).await {
+                            if action == signaling::Action::Stop {
+                                break;
                             }
-
-                            // 2. ホスト準備完了の通知
-                            "host-ready" => {
-                                let host_id = j["hostId"].as_str().unwrap_or("");
-                                std::println!("[Rust WS] 接続待ち状態になりました。Host ID: {}", host_id);
-                            }
-
-                            // 3. クライアントが接続要求したタイミングで初めて配信とWebRTCをキック (遅延初期化)
-                            "client-connected" => {
-                                std::println!("[Rust WS] クライアント接続を検知。C++ストリームを開始します...");
-                                let current_id = format!("{}:{}", adapter_idx, output_idx);
-                                let _ = write.send(Message::Text(
-                                    display_list_message(&displays, &current_id)
-                                )).await;
-                                std::println!(
-                                    "[Rust] ストリーム開始: Adapter={}, Output={}, 解像度={}x{}, FPS={}",
-                                    adapter_idx, output_idx, w, h, fps
-                                );
-                                if let Err(e) = ffi::start_stream(adapter_idx, output_idx, w, h, fps, 4000) {
-                                    std::println!("[Rust WS] C++ストリーム開始エラー: {}", e);
-                                }
-                            }
-
-                            "select-display" => {
-                                let requested_id = j["displayId"].as_str().unwrap_or("");
-                                if let Some(selected) = displays
-                                    .iter()
-                                    .find(|display| display_id(display) == requested_id)
-                                {
-                                    if selected.adapter_index == adapter_idx &&
-                                        selected.output_index == output_idx
-                                    {
-                                        continue;
-                                    }
-
-                                    std::println!(
-                                        "[Rust WS] Display switch requested: {} ({}x{})",
-                                        requested_id,
-                                        selected.width,
-                                        selected.height
-                                    );
-
-                                    adapter_idx = selected.adapter_index;
-                                    output_idx = selected.output_index;
-                                    w = selected.width as i32;
-                                    h = selected.height as i32;
-                                    select_input_display(selected);
-
-                                    let current_id = display_id(selected);
-                                    let _ = write.send(Message::Text(
-                                        display_list_message(&displays, &current_id)
-                                    )).await;
-
-                                    if let Err(e) = ffi::switch_display(
-                                        adapter_idx,
-                                        output_idx,
-                                        w,
-                                        h,
-                                        fps,
-                                        4000,
-                                    ) {
-                                        std::println!("[Rust WS] Display switch failed: {}", e);
-                                    }
-                                } else {
-                                    std::println!(
-                                        "[Rust WS] Unknown display requested: {}",
-                                        requested_id
-                                    );
-                                }
-                            }
-
-                            // 4. クライアントからの WebRTC シグナリング処理
-                            "webrtc-answer" => {
-                                let sdp = j["sdp"].as_str().unwrap_or("");
-                                std::println!("[Rust WS] Answer SDP を受信しました。C++へ転送します...");
-                                let _ = ffi::process_signaling("answer", sdp, None);
-                            }
-                            "webrtc-ice" => {
-                                let candidate_val = &j["candidate"];
-                                let candidate_str = if candidate_val.is_object() {
-                                    candidate_val["candidate"].as_str().unwrap_or("")
-                                } else {
-                                    candidate_val.as_str().unwrap_or("")
-                                };
-
-                                let mid_str = match j["mid"].as_str() {
-                                    Some(m) => Some(m),
-                                    None => candidate_val["sdpMid"].as_str(),
-                                };
-
-                                std::println!("[Rust WS] Remote ICE Candidate を受信しました。C++へ転送します: {}", candidate_str);
-                                let _ = ffi::process_signaling("candidate", candidate_str, mid_str);
-                            }
-                            "input" => {
-                                ffi::handle_remote_input(&msg);
-                            }
-                            _ => {}
                         }
                     }
                 }
             }
         }
-        std::println!("[Rust WS] WebSocket クローズ処理実行中...");
+
+        std::println!("[Rust WS] Closing WebSocket...");
         let _ = write.close().await;
     });
 
     Ok(())
 }
 
-#[tauri::command]
-async fn stop_host() -> Result<(), String> {
-    std::println!("[Rust] ストリーミング配信の停止を要求中...");
-
-    // 1. WebSocket シグナリングタスクのキャンセル
+fn cleanup_resources() {
     if let Some(cancel_tx) = WS_CANCEL_TX.lock().unwrap().take() {
         let _ = cancel_tx.send(());
     }
     *ffi::WS_SENDER.lock().unwrap() = None;
 
-    // 2. C++ 配信ストリームの停止
     let _ = ffi::stop_stream();
-
-    // 3. FFI 接続のクリーンアップとシャットダウン
     ffi::shutdown_engine();
-
-    std::println!("[Rust] 配信停止完了");
-    Ok(())
 }
 
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![
-            start_host,
-            stop_host,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+#[tauri::command]
+async fn stop_host() -> Result<(), String> {
+    std::println!("[Rust] Stopping stream...");
+    cleanup_resources();
+    std::println!("[Rust] Stopped");
+    Ok(())
 }

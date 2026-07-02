@@ -72,6 +72,18 @@ private:
     bool CopyToEncodeTexture(
         ID3D11Texture2D* source,
         ID3D11Texture2D* destination);
+    bool EnsureStagingTexture(const D3D11_TEXTURE2D_DESC& source_desc);
+    void CopyWithoutRotation(
+        const D3D11_MAPPED_SUBRESOURCE& mapped,
+        uint32_t output_width,
+        uint32_t output_height,
+        ID3D11Texture2D* destination);
+    void CopyWithRotation(
+        const D3D11_MAPPED_SUBRESOURCE& mapped,
+        const D3D11_TEXTURE2D_DESC& source_desc,
+        uint32_t output_width,
+        uint32_t output_height,
+        ID3D11Texture2D* destination);
     ID3D11Texture2D* AcquireEncodeTexture();
     void ReturnEncodeTexture(ID3D11Texture2D* texture);
 

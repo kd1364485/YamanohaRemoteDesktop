@@ -16,10 +16,11 @@ constexpr uint64_t kEncoderPollTimeoutUs = 5000;
 constexpr auto kSenderWaitTimeout = std::chrono::milliseconds(5);
 constexpr auto kIdleWait = std::chrono::milliseconds(1);
 constexpr auto kPeriodicKeyFrameInterval = std::chrono::seconds(3);
-// nvEncReconfigureEncoder can strand completion events when asynchronous
-// frames are still in flight. Keep streaming at the configured bitrate until
-// reconfiguration is implemented as a drain-and-resume operation.
-constexpr bool kEnableDynamicBitrate = false;
+// Dynamic bitrate was disabled because nvEncReconfigureEncoder could strand
+// completion events when async frames were in flight.  Async encoding is now
+// disabled (kUseAsyncEncoding=false), so reconfiguration is safe.  The Media
+// Foundation encoder also supports safe reconfiguration.
+constexpr bool kEnableDynamicBitrate = true;
 
 uint64_t TimestampMicroseconds(
     std::chrono::steady_clock::time_point time_point) {

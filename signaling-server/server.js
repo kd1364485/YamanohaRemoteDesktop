@@ -1,8 +1,8 @@
 import { WebSocketServer } from "ws";
 import http from "http";
-import bcrypt from "bcrypt";
+import bcrypt from "bcrypt";//パスワードハッシュ化ライブラリ
 import jwt from "jsonwebtoken";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3";//SQLiteデータベースドライバ
 
 const PORT = process.env.PORT || 8080;
 const JWT_SECRET = process.env.JWT_SECRET || "yamanoha-remote-desktop-secret-change-me";
@@ -12,10 +12,10 @@ const DB_PATH = process.env.DB_PATH || "data.db";
 const db = new Database(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    id INTEGER PRIMARY KEY AUTOINCREMENT,//ユーザーID
+    username TEXT UNIQUE NOT NULL,//ユーザー名
+    password_hash TEXT NOT NULL,//パスワードハッシュ
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP//作成日時
   )
 `);
 
@@ -31,6 +31,7 @@ function sendJSON(ws, data) {
   }
 }
 
+//JWT（JSON Web Token）を検証する
 function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET);
@@ -167,7 +168,7 @@ wss.on("connection", (ws) => {
         ws.close();
         return;
       }
-      const payload = verifyToken(msg.token);
+      const payload = verifyToken(msg.token);//トークン検証
       if (!payload) {
         sendJSON(ws, { type: "error", message: "無効なトークンです" });
         ws.close();
@@ -197,11 +198,11 @@ wss.on("connection", (ws) => {
             }
           }
         }
-        hostId = `host-${userId}-${Date.now()}`;
-        hosts.set(hostId, { ws, userId, username, deviceName, instanceId });
-        ws._hostId = hostId;
-        sendJSON(ws, { type: "host-ready", hostId, deviceName });
-        console.log(`Host registered: ${username} (${deviceName}) -> ${hostId}`);
+        hostId = `host-${userId}-${Date.now()}`;//ホストID生成
+        hosts.set(hostId, { ws, userId, username, deviceName, instanceId });//ホストを登録
+        ws._hostId = hostId;//ホストIDを設定
+        sendJSON(ws, { type: "host-ready", hostId, deviceName });//ホスト準備完了を送信
+        console.log(`Host registered: ${username} (${deviceName}) -> ${hostId}`);//ログ出力
         break;
       }
 
@@ -227,9 +228,9 @@ wss.on("connection", (ws) => {
         hostId = targetHostId;
         clients.set(hostId, ws);
         ws._hostId = hostId;
-        sendJSON(ws, { type: "connected" });
-        sendJSON(hostEntry.ws, { type: "client-connected" });
-        console.log(`Client connected to host: ${hostId}`);
+        sendJSON(ws, { type: "connected" });//接続完了を送信
+        sendJSON(hostEntry.ws, { type: "client-connected" });//ホストに接続通知を送信
+        console.log(`Client connected to host: ${hostId}`);//ログ出力
         break;
       }
 
@@ -237,7 +238,7 @@ wss.on("connection", (ws) => {
         if (role !== "client") return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
-          hostEntry.ws.send(raw.toString());
+          hostEntry.ws.send(raw.toString());//入力データをホストに送信
         }
         break;
       }
@@ -246,7 +247,7 @@ wss.on("connection", (ws) => {
         if (role !== "host") return;
         const clientWs = clients.get(hostId);
         if (clientWs) {
-          clientWs.send(raw.toString());
+          clientWs.send(raw.toString());//スクリーン情報クライアントに送信
         }
         break;
       }
@@ -256,7 +257,7 @@ wss.on("connection", (ws) => {
         if (role !== "host") return;
         const clientWs = clients.get(hostId);
         if (clientWs) {
-          clientWs.send(raw.toString());
+          clientWs.send(raw.toString());//ディスプレイ一覧をクライアントに送信
         }
         break;
       }
@@ -276,7 +277,7 @@ wss.on("connection", (ws) => {
         if (role !== "client") return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
-          hostEntry.ws.send(raw.toString());
+          hostEntry.ws.send(raw.toString());//ディスプレイ選択をホストに送信
         }
         break;
       }
@@ -296,7 +297,7 @@ wss.on("connection", (ws) => {
         if (role !== "client") return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
-          hostEntry.ws.send(raw.toString());
+          hostEntry.ws.send(raw.toString());//SDP answerをホストに送信
         }
         break;
       }

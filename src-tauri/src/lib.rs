@@ -3,13 +3,14 @@ use once_cell::sync::Lazy;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures_util::{StreamExt, SinkExt};
 
-mod ffi;
-mod input_control;
-mod signaling;
-
+mod ffi;//C++　DLLとの橋渡し
+mod input_control;//リモート入力処理
+mod signaling;//シグナリングクライアント
+//Websocketループを停止させるためのキャンセル信号
 static WS_CANCEL_TX: Lazy<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
     Lazy::new(|| Mutex::new(None));
 
+    //アプリ起動
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -26,6 +27,7 @@ pub fn run() {
     });
 }
 
+//ホスト開始
 #[tauri::command]
 async fn start_host(
     app: tauri::AppHandle,
@@ -36,10 +38,10 @@ async fn start_host(
     let _ = stop_host().await;
 
     std::println!("[Rust] Initializing native C++ engine...");
-    ffi::init_engine(app)?;
+    ffi::init_engine(app)?;//C++エンジン初期化
 
     let displays = ffi::list_displays().unwrap_or_default();
-    let mut adapter_idx = 0;
+    let mut adapter_idx = 0;//
     let mut output_idx = 0;
     let mut w = 1920;
     let mut h = 1080;
@@ -58,7 +60,7 @@ async fn start_host(
         .iter()
         .find(|d| d.adapter_index == adapter_idx && d.output_index == output_idx)
     {
-        signaling::select_input_display(selected);
+        signaling::select_input_display(selected);//入力ディスプレイ選択
     }
 
     let fps = 60;
@@ -100,9 +102,10 @@ async fn start_host(
         };
         std::println!("[Rust WS] Connected");
 
+        //WebSocketストリームを**送信側（write）と受信側（read）**に分割
         let (mut write, mut read) = ws_stream.split();
 
-        let auth_msg = serde_json::json!({
+            let auth_msg = serde_json::json!({
             "type": "auth",
             "token": token
         })
@@ -164,12 +167,12 @@ async fn start_host(
 
 fn cleanup_resources() {
     if let Some(cancel_tx) = WS_CANCEL_TX.lock().unwrap().take() {
-        let _ = cancel_tx.send(());
+        let _ = cancel_tx.send(());//Websocketループに停止信号
     }
-    *ffi::WS_SENDER.lock().unwrap() = None;
+    *ffi::WS_SENDER.lock().unwrap() = None;//送信チャネル削除
 
-    let _ = ffi::stop_stream();
-    ffi::shutdown_engine();
+    let _ = ffi::stop_stream();//C++エンジンのストリーム停止
+    ffi::shutdown_engine();//C++エンジン終了
 }
 
 #[tauri::command]

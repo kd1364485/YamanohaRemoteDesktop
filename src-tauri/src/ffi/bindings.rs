@@ -1,5 +1,6 @@
 use std::os::raw::{c_char, c_int};
-
+//#[link(name = "yamanoha_core")] — yamanoha_core.dll にリンク
+//extern "C" — C言語呼び出し規約。C++側は extern "C" でエクスポートしている
 #[link(name = "yamanoha_core")]
 extern "C" {
     pub(crate) fn yamanoha_init() -> c_int;

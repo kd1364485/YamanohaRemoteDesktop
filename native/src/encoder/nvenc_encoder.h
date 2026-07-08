@@ -84,6 +84,11 @@ private:
     void* RegisterResource(ID3D11Texture2D* texture);
     void UnregisterResource(void* registered_resource);
 
+    /// @brief セッション設定を構築する
+    /// @param config エンコーダ設定
+    /// @param encode_config NVENC エンコード設定
+    /// @param initialize_params NVENC 初期化パラメータ
+    /// @return 成功時 true
     bool BuildSessionConfiguration(
         const EncoderConfig& config,
         NV_ENC_CONFIG& encode_config,
@@ -114,12 +119,12 @@ private:
     void ReleaseAsyncResources();
 
     struct AsyncJob {
-        int frame_id = 0;
-        ID3D11Texture2D* texture = nullptr;
-        void* mapped_resource = nullptr;
-        NV_ENC_OUTPUT_PTR output_buffer = nullptr;
-        HANDLE completion_event = nullptr;
-        uint64_t submitted_time_us = 0;
+    int frame_id;              // フレームID（FramePipelineとの対応付け）
+    ID3D11Texture2D* texture;  // 入力テクスチャ（完了後にプールに戻す）
+    void* mapped_resource;     // NVENCにマップされたリソース
+    NV_ENC_OUTPUT_PTR output_buffer;  // エンコード出力バッファ
+    HANDLE completion_event;   // 完了イベント（非同期待機用）
+    uint64_t submitted_time_us;
     };
 
     std::vector<NV_ENC_OUTPUT_PTR> free_output_buffers_;

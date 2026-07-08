@@ -38,7 +38,8 @@ pub fn set_active_display(x: i32, y: i32, width: u32, height: u32) {
         height: height as i32,
     });
 }
-
+//main.ts からの正規化座標（0〜1）を実際のピクセル座標に変換
+//bounds.x / bounds.y を足すことで、マルチディスプレイ環境で正しいディスプレイにカーソルを配置
 fn active_display_position(nx: f64, ny: f64) -> (i32, i32) {
     match *ACTIVE_DISPLAY.lock().unwrap() {
         Some(bounds) => (
@@ -349,7 +350,7 @@ pub fn handle_remote_input(message: &str) {
         Ok(value) => value,
         Err(error) => {
             std::println!("[Rust Input] JSON parse failed: {}", error);
-            return;
+            return;//
         }
     };
     if json["type"].as_str() != Some("input") {
@@ -419,8 +420,7 @@ pub fn handle_remote_input(message: &str) {
         return;
     }
 
-    // Pointer moves can arrive hundreds of times per second. Logging every
-    // event distorts timing and floods the dev console.
+    // マウス移動は頻繁に発生するため、ログ出力を省く
     if action != "mouse-move" && action != "mouse-move-rel" {
         std::println!("[Rust Input] action applied: {}", action);
     }

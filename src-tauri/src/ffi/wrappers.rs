@@ -6,13 +6,14 @@ use super::bindings::*;
 use super::callbacks;
 
 pub fn init_engine(app: AppHandle) -> Result<(), String> {
-    *callbacks::TAURI_APP.lock().unwrap() = Some(app);
+    *callbacks::TAURI_APP.lock().unwrap() = Some(app);//APPHandle保存
 
     let res = unsafe { yamanoha_init() };
     if res != 0 {
         return Err(format!("Engine initialization failed: {}", res));
     }
 
+    //C++エンジン初期化 → 4つのコールバック関数を登録
     unsafe {
         yamanoha_set_callbacks(
             Some(callbacks::on_local_description),
@@ -25,11 +26,14 @@ pub fn init_engine(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+//C++エンジンを終了し、AppHandle をクリア
 pub fn shutdown_engine() {
     unsafe { yamanoha_shutdown() };
     *callbacks::TAURI_APP.lock().unwrap() = None;
 }
 
+//10台分のバッファを用意してC++に渡す
+//C++が書き込んだ数（count）で切り詰め
 pub fn list_displays() -> Result<Vec<super::YamanohaDisplayInfo>, String> {
     let mut buffer = vec![super::YamanohaDisplayInfo::default(); 10];
 
@@ -103,6 +107,9 @@ pub fn process_signaling(
     sdp_or_candidate: &str,
     mid: Option<&str>,
 ) -> Result<(), String> {
+    // Rustの &str は内部にnullバイトを含めることができるが、
+    // C言語の文字列はnullバイト（\0）で終端を判定する。そのため、
+    // C言語が正しく文字列の終わりを認識できるように変換が必要
     let c_msg_type = CString::new(msg_type).map_err(|e| e.to_string())?;
     let c_sdp_or_candidate = CString::new(sdp_or_candidate).map_err(|e| e.to_string())?;
 

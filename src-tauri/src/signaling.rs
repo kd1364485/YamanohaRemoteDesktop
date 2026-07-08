@@ -1,7 +1,7 @@
-use crate::ffi;
-use futures_util::SinkExt;
-use tokio_tungstenite::tungstenite::protocol::Message;
-use tokio_tungstenite::WebSocketStream;
+use crate::ffi;//C++エンジンのFFI呼び出し
+use futures_util::SinkExt;//WebSocket送信
+use tokio_tungstenite::tungstenite::protocol::Message;//WebSocketメッセージ
+use tokio_tungstenite::WebSocketStream;//WebSocketストリーム
 
 #[derive(PartialEq)]
 pub enum Action {
@@ -25,7 +25,7 @@ pub fn display_id(display: &ffi::YamanohaDisplayInfo) -> String {
 
 fn wide_string(value: &[u16]) -> String {
     let length = value.iter().position(|&ch| ch == 0).unwrap_or(value.len());
-    String::from_utf16_lossy(&value[..length])
+    String::from_utf16_lossy(&value[..length])//UTF-16文字列をUTF-8文字列に変換
 }
 
 fn display_list_message(
@@ -94,11 +94,12 @@ pub async fn handle_message(
             let current_id = format!("{}:{}", ctx.adapter_idx, ctx.output_idx);
             let _ = write
                 .send(Message::Text(display_list_message(&ctx.displays, &current_id)))
-                .await;
+                .await;//ディスプレイ一覧をクライアントに送信
             std::println!(
                 "[Rust] Stream start: Adapter={}, Output={}, {}x{}, FPS={}",
                 ctx.adapter_idx, ctx.output_idx, ctx.w, ctx.h, ctx.fps
             );
+            // クライアントが接続したら、C++エンジンを起動して画面キャプチャを開始
             if let Err(e) = ffi::start_stream(
                 ctx.adapter_idx,
                 ctx.output_idx,
@@ -115,12 +116,14 @@ pub async fn handle_message(
             handle_select_display(j, ctx, write).await;
         }
 
+        //クライアントから返ってきたAnswer SDPをC++エンジン（libdatachannel）に渡す
         "webrtc-answer" => {
             let sdp = j["sdp"].as_str().unwrap_or("");
             std::println!("[Rust WS] Answer SDP received");
             let _ = ffi::process_signaling("answer", sdp, None);
         }
 
+        //クライアントからのICE候補をC++エンジンに渡す
         "webrtc-ice" => {
             let candidate_val = &j["candidate"];
             let candidate_str = if candidate_val.is_object() {
@@ -136,6 +139,7 @@ pub async fn handle_message(
             let _ = ffi::process_signaling("candidate", candidate_str, mid_str);
         }
 
+        //クライアントからの入力JSONをC++エンジンに渡す
         "input" => {
             let msg_str = j.to_string();
             ffi::handle_remote_input(&msg_str);
@@ -162,13 +166,13 @@ async fn handle_select_display(
         .find(|d| display_id(d) == requested_id)
     else {
         std::println!("[Rust WS] Unknown display: {}", requested_id);
-        return;
+        return;//未知のディスプレイIDは無視
     };
 
     if selected.adapter_index == ctx.adapter_idx
         && selected.output_index == ctx.output_idx
     {
-        return;
+        return;//同じディスプレイを選択した場合は何もしない
     }
 
     std::println!(

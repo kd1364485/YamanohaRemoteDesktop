@@ -32,11 +32,11 @@ function buildDefaultServerUrl(): string {
 
 const DEFAULT_SERVER_URL = buildDefaultServerUrl();
 
-let clientWs: WebSocket | null = null;
+let clientWs: WebSocket | null = null; // クライアント用WebSocket（ホストとの通信路）
 
 // WebRTC関連
-let pc: RTCPeerConnection | null = null;
-let remoteStream: MediaStream | null = null;
+let pc: RTCPeerConnection | null = null;// WebRTCのP2P接続オブジェクト
+let remoteStream: MediaStream | null = null;//受信した映像ストリーム
 // currentCursor removed - host-side compositing handles cursor
 // remoteDescriptionセット前に到着したICE candidateを一時保持するバッファ
 let pendingIceCandidates: RTCIceCandidateInit[] = [];
@@ -70,6 +70,8 @@ async function setupWebRTC(): Promise<void> {
   pendingIceCandidates = [];
 
   // RTCPeerConnection作成
+  //STUNサーバー — 自分のグローバルIPアドレスを教えてもらうサーバー。Googleの無料STUNを使用
+  //これによりICE Candidate（接続候補アドレス）が生成される
   const iceServers: RTCIceServer[] = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -182,9 +184,9 @@ async function setupWebRTC(): Promise<void> {
 // ビデオフレームの更新を監視し、一定時間更新がない場合は回復を試みる
 let freezeCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let lastFrameTime = 0;
-let freezeRecoveryAttempts = 0;
-const FREEZE_THRESHOLD_MS = 2000;
-const FREEZE_MAX_RECOVERY_ATTEMPTS = 3;
+let freezeRecoveryAttempts = 0;//回復試行回数
+const FREEZE_THRESHOLD_MS = 2000;//フリーズ判定時間（ミリ秒）
+const FREEZE_MAX_RECOVERY_ATTEMPTS = 3;//最大回復試行回数
 
 function startFreezeDetection(video: HTMLVideoElement): void {
   stopFreezeDetection();
@@ -616,7 +618,7 @@ function connectToHost(hostId: string): void {
         showView("remote-view");
         setConnectionStatus("接続済み", "green");
         setupRemoteCanvas();//canvasの初期化 + 入力イベント登録
-        setupWebRTC();
+        setupWebRTC();      //WebRTC準備(ホスト待ち)
         break;
 
       case "display-list"://ホストのディスプレイ一覧を受信
@@ -660,7 +662,7 @@ function connectToHost(hostId: string): void {
   clientWs.onclose = () => {
     // キーボード捕捉を解除（押しっぱなしキーも解放）
     detachRemoteKeyboard();
-    // タッチリスナーも解除（再接続時の重複防止）
+    // タッチイベントも解除（再接続時の重複防止）
     detachTouchControls();
     // フリーズ検出を停止
     stopFreezeDetection();
@@ -763,7 +765,7 @@ function setupRemoteCanvas(): void {
       if (Date.now() - lastTouchTime < TOUCH_EVENT_COOLDOWN_MS) { e.preventDefault(); return; }
     };
 
-    video.oncontextmenu = (e) => e.preventDefault();
+    video.oncontextmenu = (e) => e.preventDefault(); // 右クリックメニュー抑制
 
     video.onwheel = (e) => {
       if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
@@ -771,11 +773,11 @@ function setupRemoteCanvas(): void {
       e.preventDefault();
     };
 
-    video.tabIndex = 0;
-    video.focus();
-    attachRemoteKeyboard();
+    video.tabIndex = 0;//video要素にフォーカス可能にする
+    video.focus();//video要素にフォーカスを当てる)(キーボード入力のため)
+    attachRemoteKeyboard();//キーボードイベント登録
 
-    setupTouchControls(video);
+    setupTouchControls(video);//タッチ操作登録
   }
 }
 

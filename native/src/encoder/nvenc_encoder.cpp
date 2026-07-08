@@ -648,7 +648,7 @@ bool NvencEncoder::ReconfigureBitrate(uint32_t bitrate_kbps) {
     NV_ENC_RECONFIGURE_PARAMS reconfigure_params{};
     reconfigure_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
     reconfigure_params.reInitEncodeParams = updated_initialize_params;
-    reconfigure_params.forceIDR = 1;
+    reconfigure_params.forceIDR = 1;// 再設定後にキーフレームを強制
 
     std::lock_guard<std::mutex> api_lock(api_mutex_);
     const NVENCSTATUS status = nv_api_.nvEncReconfigureEncoder(

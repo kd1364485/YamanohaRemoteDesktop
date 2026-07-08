@@ -125,6 +125,7 @@ YAMANOHA_API int yamanoha_init() {
             FILE_ATTRIBUTE_NORMAL,
             nullptr
         );
+        
         if (hFile != INVALID_HANDLE_VALUE) {
             MINIDUMP_EXCEPTION_INFORMATION mdei{};
             mdei.ThreadId = GetCurrentThreadId();
@@ -215,7 +216,7 @@ YAMANOHA_API void yamanoha_shutdown() {
 
     // COM 終了
     if (g_engine.com_initialized) {
-        CoUninitialize();
+        CoUninitialize();//COM終了
         g_engine.com_initialized = false;
     }
 

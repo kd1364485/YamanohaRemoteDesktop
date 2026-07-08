@@ -61,10 +61,10 @@ private:
         uint64_t timestamp_us = 0;
     };
 
-    bool InitializeCapture(const Display& display);
-    bool InitializeEncoderDevice(const Display& display);
-    bool CreateTransferTextures(uint32_t width, uint32_t height);
-    bool InitializeEncoder(uint32_t width, uint32_t height, int bitrate_kbps);
+    bool InitializeCapture(const Display& display);//キャプチャデバイス＋DesktopDuplicator
+    bool InitializeEncoderDevice(const Display& display);//エンコードデバイス
+    bool CreateTransferTextures(uint32_t width, uint32_t height);//クロスアダプタ共有テクスチャ
+    bool InitializeEncoder(uint32_t width, uint32_t height, int bitrate_kbps);//Nvenc/Mfエンコーダ
     void ReleaseResources();
 
     void CaptureLoop();
@@ -96,10 +96,10 @@ private:
     void ClearSubmittedFrames();
     int FindNvidiaAdapterIndex() const;
 
-    std::unique_ptr<CaptureEngine> capture_engine_;
-    std::unique_ptr<D3D11DeviceManager> encode_device_manager_;
-    std::unique_ptr<VideoEncoder> encoder_;
-    WebrtcStreamer* streamer_ = nullptr;
+    std::unique_ptr<CaptureEngine> capture_engine_;//キャプチャ用(出力用アダプタ)
+    std::unique_ptr<D3D11DeviceManager> encode_device_manager_;//エンコード用Nvidua優先
+    std::unique_ptr<VideoEncoder> encoder_;//エンコード用テクスチャプール
+    WebrtcStreamer* streamer_ = nullptr;//CPU転送用ステージングテクスチャ
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture_;
     std::vector<Microsoft::WRL::ComPtr<ID3D11Texture2D>> encode_textures_;

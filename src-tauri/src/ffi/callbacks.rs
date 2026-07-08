@@ -6,7 +6,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
+//Tauriアプリハンドル
 pub static TAURI_APP: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
+//WebSocket送信チャネル
 pub static WS_SENDER: Lazy<Mutex<Option<UnboundedSender<String>>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Clone, Serialize)]
@@ -20,13 +22,16 @@ struct StatePayload {
     pub connected: bool,
 }
 
+//C++エンジンがSDP Offerを生成した時に呼ばれる
 pub unsafe extern "C" fn on_local_description(sdp: *const c_char, sdp_type: *const c_char) {
     if sdp.is_null() || sdp_type.is_null() {
         return;
     }
+    //なぜ .into_owned() が必要か: C++から渡されたポインタは関数が終わると無効になる可能性がある。
+    // Rust側で文字列を長期間保持するには所有権を持つ String に変換する必要がある。
     let sdp_str = CStr::from_ptr(sdp).to_string_lossy().into_owned();
     let type_str = CStr::from_ptr(sdp_type).to_string_lossy().into_owned();
-
+    //どちらのSDPが生成されたかをコンソールに出力
     std::println!("[Rust FFI] Local Description (SDP): {}", type_str);
 
     if let Some(app) = TAURI_APP.lock().unwrap().as_ref() {
@@ -65,6 +70,7 @@ pub unsafe extern "C" fn on_local_candidate(candidate: *const c_char, mid: *cons
         CStr::from_ptr(mid).to_string_lossy().into_owned()
     };
 
+    //Tauriイベント送信
     if let Some(app) = TAURI_APP.lock().unwrap().as_ref() {
         let _ = app.emit(
             "webrtc-local-candidate",

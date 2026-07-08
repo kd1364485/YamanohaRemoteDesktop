@@ -3,6 +3,9 @@ use futures_util::SinkExt;//WebSocket送信
 use tokio_tungstenite::tungstenite::protocol::Message;//WebSocketメッセージ
 use tokio_tungstenite::WebSocketStream;//WebSocketストリーム
 
+/// ストリーム配信時のデフォルトビットレート（kbps）
+const DEFAULT_BITRATE_KBPS: i32 = 4000;
+
 #[derive(PartialEq)]
 pub enum Action {
     Stop,
@@ -106,7 +109,7 @@ pub async fn handle_message(
                 ctx.w,
                 ctx.h,
                 ctx.fps,
-                4000,
+                DEFAULT_BITRATE_KBPS,
             ) {
                 std::println!("[Rust WS] Stream start error: {}", e);
             }
@@ -199,7 +202,7 @@ async fn handle_select_display(
         ctx.w,
         ctx.h,
         ctx.fps,
-        4000,
+        DEFAULT_BITRATE_KBPS,
     ) {
         std::println!("[Rust WS] Display switch failed: {}", e);
     }

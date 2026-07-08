@@ -156,20 +156,15 @@ pub fn inject_mouse_click(button: u8, is_down: bool) -> Result<(), String> {
 }
 
 /// @brief キーボード入力を注入する
-/// @param key_code: JavaScript の event.keyCode (仮想キーコードとほぼ一致)
+/// @param vk_code: Windows仮想キーコード (key_name_to_vk で変換済み)
 /// @param is_down: true=押し込み, false=離す
-pub fn inject_key_event(key_code: u32, is_down: bool) -> Result<(), String> {
+pub fn inject_key_event(vk_code: u32, is_down: bool) -> Result<(), String> {
     unsafe {
         let mut input: INPUT = std::mem::zeroed();
         input.r#type = INPUT_KEYBOARD;
 
         let key_input = &mut input.Anonymous.ki;
-        
-        // JS の keyCode を Windows の仮想キーコード (Virtual Key) としてマッピング
-        // 基本的なキー (文字、数字、Enter、矢印など) は 1:1 でマッピング可能です。
-        let mapped_vk = map_js_keycode_to_vk(key_code);
-        
-        key_input.wVk = mapped_vk as u16;
+        key_input.wVk = vk_code as u16;
         key_input.wScan = 0;
         key_input.time = 0;
         key_input.dwExtraInfo = 0;
@@ -183,30 +178,6 @@ pub fn inject_key_event(key_code: u32, is_down: bool) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// @brief JSキーコードからWindowsの仮想キーコード(VK)への簡単なマッピングを行うヘルパー
-fn map_js_keycode_to_vk(js_code: u32) -> u32 {
-    // ほとんどのキー（A-Z, 0-9, 方向キー, Enter等）は一致しています。
-    // 一部の特殊キー（ブラウザ独自のキーコード）がある場合のみここで変換テーブルを追加します。
-    match js_code {
-        // JS のバックスペース (8) -> VK_BACK (0x08)
-        8 => 0x08,
-        // JS の Tab (9) -> VK_TAB (0x09)
-        9 => 0x09,
-        // JS の Enter (13) -> VK_RETURN (0x0D)
-        13 => 0x0D,
-        // JS の Shift (16) -> VK_SHIFT (0x10)
-        16 => 0x10,
-        // JS の Ctrl (17) -> VK_CONTROL (0x11)
-        17 => 0x11,
-        // JS の Alt (18) -> VK_MENU (0x12)
-        18 => 0x12,
-        // JS の Escape (27) -> VK_ESCAPE (0x1B)
-        27 => 0x1B,
-        // その他はそのままVKコードとして流用
-        other => other,
-    }
 }
 
 /// @brief マウスカーソルを相対移動 (dx, dy) させる

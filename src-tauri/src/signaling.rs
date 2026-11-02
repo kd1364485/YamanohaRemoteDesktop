@@ -2,9 +2,16 @@ use crate::ffi;//C++エンジンのFFI呼び出し
 use futures_util::SinkExt;//WebSocket送信
 use tokio_tungstenite::tungstenite::protocol::Message;//WebSocketメッセージ
 use tokio_tungstenite::WebSocketStream;//WebSocketストリーム
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};//接続の許可ダイアログ
 
 /// ストリーム配信時のデフォルトビットレート（kbps）
 const DEFAULT_BITRATE_KBPS: i32 = 4000;
+
+/// シグナリングサーバーとの WebSocket の送信側
+type WsWrite = futures_util::stream::SplitSink<
+    WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
+>;
 
 #[derive(PartialEq)]
 pub enum Action {
@@ -20,6 +27,43 @@ pub struct SessionContext {
     pub fps: i32,
     pub device_name: String,
     pub instance_id: String,
+
+    // --- 接続の許可 ---
+    // クライアントが接続しても、この PC の持ち主が「許可」を押すまでは、
+    // 画面の配信も、マウス・キーボードの入力の受け付けも、始めない(approved が true になるまで)。
+    pub app: tauri::AppHandle,                                  // ダイアログを出すために必要
+    pub approval_tx: tokio::sync::mpsc::UnboundedSender<bool>,  // ダイアログの答え(許可 = true)を、メインのループに戻す
+    pub client_present: bool,     // 今、クライアントが接続しているか
+    pub approval_pending: bool,   // ダイアログを出して、答えを待っているか
+    pub approved: bool,           // 今のクライアントを、許可したか
+    pub latest_who: String,       // 今、接続しているクライアントの「アカウント名 / IP」
+    pub pending_who: String,      // ダイアログに表示した、クライアントの「アカウント名 / IP」
+}
+
+/// 接続の許可を求めるダイアログを出す(答えは approval_tx で、メインのループに戻る)
+fn ask_permission(ctx: &mut SessionContext, user: &str, ip: &str) {
+    ctx.approval_pending = true;
+    ctx.pending_who = ctx.latest_who.clone();
+    std::println!("[Rust WS] Client wants to connect (user={}, ip={}); asking for permission", user, ip);
+
+    let tx = ctx.approval_tx.clone();
+    ctx.app
+        .dialog()
+        .message(format!(
+            "リモートからの接続要求です。\n\nアカウント: {}\n接続元 IP: {}\n\n\
+             許可すると、この PC の画面が表示され、マウスとキーボードを操作されます。\n\
+             心当たりがなければ「拒否する」を選んでください。",
+            user, ip
+        ))
+        .title("Yamanoha Remote Desktop - 接続の許可")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "許可する".to_string(),
+            "拒否する".to_string(),
+        ))
+        .show(move |allowed| {
+            let _ = tx.send(allowed);//答えを、メインのループに戻す
+        });
 }
 
 pub fn display_id(display: &ffi::YamanohaDisplayInfo) -> String {
@@ -93,34 +137,40 @@ pub async fn handle_message(
         }
 
         "client-connected" => {
-            std::println!("[Rust WS] Client connected, starting stream...");
-            let current_id = format!("{}:{}", ctx.adapter_idx, ctx.output_idx);
-            let _ = write
-                .send(Message::Text(display_list_message(&ctx.displays, &current_id)))
-                .await;//ディスプレイ一覧をクライアントに送信
-            std::println!(
-                "[Rust] Stream start: Adapter={}, Output={}, {}x{}, FPS={}",
-                ctx.adapter_idx, ctx.output_idx, ctx.w, ctx.h, ctx.fps
-            );
-            // クライアントが接続したら、C++エンジンを起動して画面キャプチャを開始
-            if let Err(e) = ffi::start_stream(
-                ctx.adapter_idx,
-                ctx.output_idx,
-                ctx.w,
-                ctx.h,
-                ctx.fps,
-                DEFAULT_BITRATE_KBPS,
-            ) {
-                std::println!("[Rust WS] Stream start error: {}", e);
+            // 新しいクライアントが来たら、前の許可は無効にして、改めて許可を求める
+            ctx.client_present = true;
+            ctx.approved = false;
+
+            let user = j["username"].as_str().unwrap_or("(不明)").to_string();
+            let ip = j["clientIp"].as_str().unwrap_or("(不明)").to_string();
+            ctx.latest_who = format!("{} / {}", user, ip);
+
+            // すでにダイアログを出しているときは、その答えを待つ。
+            // (答えが来たとき、表示した相手と、今の相手が違えば、改めて聞き直す。on_approval を参照)
+            if !ctx.approval_pending {
+                ask_permission(ctx, &user, &ip);
             }
         }
 
+        // クライアントが切断した。次のクライアントには、改めて許可を求める
+        "disconnected" => {
+            std::println!("[Rust WS] Client disconnected");
+            ctx.client_present = false;
+            ctx.approved = false;
+        }
+
         "select-display" => {
+            if !ctx.approved {
+                return None;//許可されるまで、クライアントの操作は受け付けない
+            }
             handle_select_display(j, ctx, write).await;
         }
 
         //クライアントから返ってきたAnswer SDPをC++エンジン（libdatachannel）に渡す
         "webrtc-answer" => {
+            if !ctx.approved {
+                return None;
+            }
             let sdp = j["sdp"].as_str().unwrap_or("");
             std::println!("[Rust WS] Answer SDP received");
             let _ = ffi::process_signaling("answer", sdp, None);
@@ -128,6 +178,9 @@ pub async fn handle_message(
 
         //クライアントからのICE候補をC++エンジンに渡す
         "webrtc-ice" => {
+            if !ctx.approved {
+                return None;
+            }
             let candidate_val = &j["candidate"];
             let candidate_str = if candidate_val.is_object() {
                 candidate_val["candidate"].as_str().unwrap_or("")
@@ -144,6 +197,9 @@ pub async fn handle_message(
 
         //クライアントからの入力JSONをC++エンジンに渡す
         "input" => {
+            if !ctx.approved {
+                return None;//許可されるまで、マウス・キーボードの操作は、受け付けない
+            }
             let msg_str = j.to_string();
             ffi::handle_remote_input(&msg_str);
         }
@@ -152,6 +208,64 @@ pub async fn handle_message(
     }
 
     None
+}
+
+/// 許可ダイアログの答えを受け取ったときの処理
+/// 許可: 画面の配信を始める / 拒否: サーバーに、クライアントを切るよう伝える
+pub async fn on_approval(allowed: bool, ctx: &mut SessionContext, write: &mut WsWrite) {
+    ctx.approval_pending = false;
+
+    // ダイアログが開いている間に、クライアントが切断していた。何もしない(配信も始めない)
+    if !ctx.client_present {
+        std::println!("[Rust WS] The client already left; ignoring the answer");
+        ctx.approved = false;
+        return;
+    }
+
+    // ダイアログに表示した相手と、今接続している相手が、違う(表示のあとで、別のクライアントに替わった)。
+    // この答えは、今の相手への許可ではないので、使わずに、今の相手で、聞き直す。
+    if ctx.pending_who != ctx.latest_who {
+        std::println!("[Rust WS] The client changed while the dialog was open; asking again");
+        ctx.approved = false;
+        let who = ctx.latest_who.clone();
+        let (user, ip) = who.split_once(" / ").unwrap_or((who.as_str(), ""));
+        ask_permission(ctx, user, ip);
+        return;
+    }
+
+    if !allowed {
+        std::println!("[Rust WS] Rejected by the user");
+        ctx.approved = false;
+        ctx.client_present = false;//サーバーが、このクライアントを切る
+        let _ = write
+            .send(Message::Text(
+                serde_json::json!({ "type": "reject-client" }).to_string(),
+            ))
+            .await;
+        return;
+    }
+
+    std::println!("[Rust WS] Allowed by the user, starting stream...");
+    ctx.approved = true;
+    let current_id = format!("{}:{}", ctx.adapter_idx, ctx.output_idx);
+    let _ = write
+        .send(Message::Text(display_list_message(&ctx.displays, &current_id)))
+        .await;//ディスプレイ一覧をクライアントに送信
+    std::println!(
+        "[Rust] Stream start: Adapter={}, Output={}, {}x{}, FPS={}",
+        ctx.adapter_idx, ctx.output_idx, ctx.w, ctx.h, ctx.fps
+    );
+    // 許可されたら、C++エンジンを起動して画面キャプチャを開始
+    if let Err(e) = ffi::start_stream(
+        ctx.adapter_idx,
+        ctx.output_idx,
+        ctx.w,
+        ctx.h,
+        ctx.fps,
+        DEFAULT_BITRATE_KBPS,
+    ) {
+        std::println!("[Rust WS] Stream start error: {}", e);
+    }
 }
 
 async fn handle_select_display(

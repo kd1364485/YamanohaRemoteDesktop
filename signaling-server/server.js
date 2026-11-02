@@ -5,17 +5,35 @@ import jwt from "jsonwebtoken";
 import Database from "better-sqlite3";//SQLiteデータベースドライバ
 
 const PORT = process.env.PORT || 8080;
-const JWT_SECRET = process.env.JWT_SECRET || "yamanoha-remote-desktop-secret-change-me";
 const DB_PATH = process.env.DB_PATH || "data.db";
+
+// JWT の署名鍵は環境変数から必ず受け取る。
+// 以前は、未設定のとき、ソースコードに書かれた初期値を使っていた。その値を知っている人は、
+// パスワードなしで、他人のトークンを作れてしまう(=画面の閲覧と遠隔操作ができる)ため、
+// 未設定、または短すぎる場合は、起動しない。
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error(
+    "JWT_SECRET が未設定か、32文字未満です。サーバーを起動しません。\n" +
+    "  ランダムな値の作り方(PowerShell): " +
+    "$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)\n" +
+    "  fly.io: fly secrets set JWT_SECRET=<値> -a <アプリ名>   /   ローカル: $env:JWT_SECRET = '<値>'"
+  );
+  process.exit(1);
+}
+
+// 新規登録: 最初のユーザー(初回セットアップ)だけは自由に登録できる。
+// 2人目以降は、ALLOW_REGISTRATION=1 を設定したときだけ登録できる(個人用の既定は「登録を閉じる」)。
+const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION === "1";
 
 // --- データベース初期化 ---
 const db = new Database(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,//ユーザーID
-    username TEXT UNIQUE NOT NULL,//ユーザー名
-    password_hash TEXT NOT NULL,//パスワードハッシュ
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP//作成日時
+    id INTEGER PRIMARY KEY AUTOINCREMENT, -- ユーザーID
+    username TEXT UNIQUE NOT NULL, -- ユーザー名
+    password_hash TEXT NOT NULL, -- パスワードハッシュ
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP -- 作成日時
   )
 `);
 
@@ -40,12 +58,22 @@ function verifyToken(token) {
   }
 }
 
-// JSONボディをパース
+// JSONボディをパース(大きすぎるボディは、読み捨てて null を返す)
+const MAX_BODY_BYTES = 16 * 1024;
 function parseBody(req) {
   return new Promise((resolve) => {
     let body = "";
-    req.on("data", (chunk) => (body += chunk));
+    let tooLarge = false;
+    req.on("data", (chunk) => {
+      if (tooLarge) return;
+      body += chunk;
+      if (body.length > MAX_BODY_BYTES) {
+        tooLarge = true;
+        body = "";
+      }
+    });
     req.on("end", () => {
+      if (tooLarge) return resolve(null);
       try {
         resolve(JSON.parse(body));
       } catch {
@@ -53,6 +81,64 @@ function parseBody(req) {
       }
     });
   });
+}
+
+// --- ログイン・登録の失敗回数の制限(メモリ上。サーバーを再起動すると、リセットされる) ---
+// 「IP ごと」と「ユーザー名ごと」の両方で数える。IP だけだと、偽装や複数の IP で回避され、
+// ユーザー名だけだと、ほかの人のアカウントを、わざと止められるので、両方を組み合わせる。
+const LIMIT_WINDOW_MS = 15 * 60 * 1000;   // 失敗を数える期間
+const LIMIT_LOCK_MS = 15 * 60 * 1000;     // 上限に達したときの、ロック時間
+const MAX_FAILS_PER_IP = 20;
+const MAX_FAILS_PER_USER = 8;
+const MAX_REGISTER_PER_IP = 10;
+const attempts = new Map(); // key -> { fails: number[], lockedUntil: number }
+
+function lockedForMs(key, now = Date.now()) {
+  const e = attempts.get(key);
+  return e && e.lockedUntil > now ? e.lockedUntil - now : 0;
+}
+
+function recordAttempt(key, max, now = Date.now()) {
+  const e = attempts.get(key) || { fails: [], lockedUntil: 0 };
+  e.fails = e.fails.filter((t) => now - t < LIMIT_WINDOW_MS);
+  e.fails.push(now);
+  if (e.fails.length >= max) {
+    e.lockedUntil = now + LIMIT_LOCK_MS;
+    e.fails = [];
+  }
+  attempts.set(key, e);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, e] of attempts) {
+    if (e.lockedUntil <= now && e.fails.every((t) => now - t >= LIMIT_WINDOW_MS)) {
+      attempts.delete(key);
+    }
+  }
+}, 10 * 60 * 1000).unref();
+
+// 接続元の IP。fly.io は、Fly-Client-IP を付ける。そのほかは、X-Forwarded-For の先頭を使う。
+function clientIp(req) {
+  const fly = req.headers["fly-client-ip"];
+  if (typeof fly === "string" && fly) return fly;
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff) return xff.split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+}
+
+// ユーザーが存在しないときも、同じ時間のかかる bcrypt の比較をして、
+// 「そのユーザー名があるか」を、応答時間から推測されにくくする。
+const DUMMY_HASH = bcrypt.hashSync("dummy-password-for-timing", 10);
+
+function registrationOpen() {
+  if (ALLOW_REGISTRATION) return true;
+  return db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0;
+}
+
+function sendError(res, status, message, extraHeaders = {}) {
+  res.writeHead(status, { "Content-Type": "application/json", ...extraHeaders });
+  res.end(JSON.stringify({ error: message }));
 }
 
 // --- HTTPサーバー（認証API） ---
@@ -76,10 +162,35 @@ const server = http.createServer(async (req, res) => {
 
   // ユーザー登録
   if (req.url === "/api/register" && req.method === "POST") {
+    // 登録が閉じているとき(2人目以降で、ALLOW_REGISTRATION=1 でない)は、受け付けない
+    if (!registrationOpen()) {
+      sendError(res, 403, "新規登録は受け付けていません(管理者が許可したときだけ登録できます)");
+      return;
+    }
+
+    const ipKey = `register:${clientIp(req)}`;
+    const wait = lockedForMs(ipKey);
+    if (wait > 0) {
+      sendError(res, 429, "試行が多すぎます。しばらくしてからやり直してください", {
+        "Retry-After": String(Math.ceil(wait / 1000)),
+      });
+      return;
+    }
+    recordAttempt(ipKey, MAX_REGISTER_PER_IP);
+
     const body = await parseBody(req);
-    if (!body?.username || !body?.password) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "ユーザー名とパスワードが必要です" }));
+    if (typeof body?.username !== "string" || typeof body?.password !== "string" ||
+        !body.username || !body.password) {
+      sendError(res, 400, "ユーザー名とパスワードが必要です");
+      return;
+    }
+    if (body.username.length > 64) {
+      sendError(res, 400, "ユーザー名は 64 文字以内にしてください");
+      return;
+    }
+    // bcrypt は、72 バイトより後ろを無視する。短すぎるパスワードは、総当たりで破られやすい。
+    if (body.password.length < 10 || body.password.length > 72) {
+      sendError(res, 400, "パスワードは 10 文字以上 72 文字以内にしてください");
       return;
     }
 
@@ -102,18 +213,33 @@ const server = http.createServer(async (req, res) => {
   // ログイン
   if (req.url === "/api/login" && req.method === "POST") {
     const body = await parseBody(req);
-    if (!body?.username || !body?.password) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "ユーザー名とパスワードが必要です" }));
+    if (typeof body?.username !== "string" || typeof body?.password !== "string" ||
+        !body.username || !body.password) {
+      sendError(res, 400, "ユーザー名とパスワードが必要です");
+      return;
+    }
+
+    // 失敗が続いているときは、パスワードを確かめる前に、受け付けない(IP ごと・ユーザー名ごと)
+    const ipKey = `ip:${clientIp(req)}`;
+    const userKey = `user:${body.username.toLowerCase()}`;
+    const wait = Math.max(lockedForMs(ipKey), lockedForMs(userKey));
+    if (wait > 0) {
+      sendError(res, 429, "ログインの失敗が続いたため、しばらくロックしています。後でやり直してください", {
+        "Retry-After": String(Math.ceil(wait / 1000)),
+      });
       return;
     }
 
     const user = db.prepare("SELECT * FROM users WHERE username = ?").get(body.username);
-    if (!user || !bcrypt.compareSync(body.password, user.password_hash)) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "ユーザー名またはパスワードが間違っています" }));
+    // ユーザーがいなくても、bcrypt の比較は、必ず 1 回行う(応答時間で、ユーザーの有無を悟られないため)
+    const passwordOk = bcrypt.compareSync(body.password, user ? user.password_hash : DUMMY_HASH);
+    if (!user || !passwordOk) {
+      recordAttempt(ipKey, MAX_FAILS_PER_IP);
+      recordAttempt(userKey, MAX_FAILS_PER_USER);
+      sendError(res, 401, "ユーザー名またはパスワードが間違っています");
       return;
     }
+    attempts.delete(userKey); // ログインに成功したら、そのユーザー名の失敗の記録を消す
 
     const token = jwt.sign({ userId: user.id, username: user.username }, JWT_SECRET, { expiresIn: "7d" });
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -128,13 +254,28 @@ const server = http.createServer(async (req, res) => {
 // --- WebSocketサーバー（HTTPサーバーに統合） ---
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (ws) => {
+const AUTH_TIMEOUT_MS = Number(process.env.AUTH_TIMEOUT_MS) || 10000;
+
+wss.on("connection", (ws, req) => {
   let role = null;
   let userId = null;
   let username = null;
   let hostId = null;
   let deviceName = null;
   let authenticated = false;
+  const remoteIp = clientIp(req);
+
+  // 認証のメッセージを送らない接続は、一定時間で切る(接続だけを増やす嫌がらせへの対策)
+  const authTimer = setTimeout(() => {
+    if (!authenticated) {
+      sendJSON(ws, { type: "error", message: "認証がタイムアウトしました" });
+      ws.close();
+    }
+  }, AUTH_TIMEOUT_MS);
+  ws.on("close", () => clearTimeout(authTimer));
+
+  // 「今、このホストに接続している、唯一のクライアント」か。古いクライアントの操作は中継しない。
+  const isCurrentClient = () => role === "client" && hostId && clients.get(hostId) === ws;
 
   // heartbeat: pongを受け取ったら生存とみなす
   ws.isAlive = true;
@@ -226,16 +367,37 @@ wss.on("connection", (ws) => {
           return;
         }
         hostId = targetHostId;
+        // すでに別のクライアントがいるときは、古いほうを切る(1 つのホストに、クライアントは 1 つだけ)
+        const previous = clients.get(hostId);
         clients.set(hostId, ws);
+        if (previous && previous !== ws) {
+          sendJSON(previous, { type: "disconnected", message: "別のクライアントが接続しました" });
+          try { previous.close(); } catch {}
+        }
         ws._hostId = hostId;
         sendJSON(ws, { type: "connected" });//接続完了を送信
-        sendJSON(hostEntry.ws, { type: "client-connected" });//ホストに接続通知を送信
-        console.log(`Client connected to host: ${hostId}`);//ログ出力
+        // ホストに接続要求を通知する。ホストは、アカウント名と接続元の IP を表示して、許可を求める。
+        // ホストが許可するまで、画面の配信も、入力の受け付けも、始まらない。
+        sendJSON(hostEntry.ws, { type: "client-connected", username, clientIp: remoteIp });
+        console.log(`Client connected to host: ${hostId} (user=${username}, ip=${remoteIp})`);//ログ出力
+        break;
+      }
+
+      case "reject-client": {
+        // ホスト → サーバー: 接続要求を拒否する。クライアントを切断する。
+        if (role !== "host") return;
+        const clientWs = clients.get(hostId);
+        if (clientWs) {
+          clients.delete(hostId);
+          sendJSON(clientWs, { type: "disconnected", message: "ホストが接続を拒否しました" });
+          try { clientWs.close(); } catch {}
+        }
+        console.log(`Host rejected client: ${hostId}`);
         break;
       }
 
       case "input": {
-        if (role !== "client") return;
+        if (!isCurrentClient()) return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
           hostEntry.ws.send(raw.toString());//入力データをホストに送信
@@ -274,7 +436,7 @@ wss.on("connection", (ws) => {
 
       case "select-display": {
         // クライアント → ホスト: 表示するディスプレイの切替え要求
-        if (role !== "client") return;
+        if (!isCurrentClient()) return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
           hostEntry.ws.send(raw.toString());//ディスプレイ選択をホストに送信
@@ -294,7 +456,7 @@ wss.on("connection", (ws) => {
 
       case "webrtc-answer": {
         // クライアント → ホスト: WebRTC SDP answer
-        if (role !== "client") return;
+        if (!isCurrentClient()) return;
         const hostEntry = hosts.get(hostId);
         if (hostEntry) {
           hostEntry.ws.send(raw.toString());//SDP answerをホストに送信
@@ -309,7 +471,7 @@ wss.on("connection", (ws) => {
           if (clientWs) {
             clientWs.send(raw.toString());
           }
-        } else if (role === "client") {
+        } else if (isCurrentClient()) {
           const hostEntry = hosts.get(hostId);
           if (hostEntry) {
             hostEntry.ws.send(raw.toString());
@@ -333,12 +495,15 @@ wss.on("connection", (ws) => {
       }
       console.log(`Host disconnected: ${hostId}`);
     } else if (role === "client" && hostId) {
-      clients.delete(hostId);
-      const hostEntry = hosts.get(hostId);
-      if (hostEntry) {
-        sendJSON(hostEntry.ws, { type: "disconnected", message: "クライアントが切断しました" });
+      // 置き換えられた古いクライアントの切断は、新しいクライアントの登録を消さない
+      if (clients.get(hostId) === ws) {
+        clients.delete(hostId);
+        const hostEntry = hosts.get(hostId);
+        if (hostEntry) {
+          sendJSON(hostEntry.ws, { type: "disconnected", message: "クライアントが切断しました" });
+        }
+        console.log(`Client disconnected from: ${hostId}`);
       }
-      console.log(`Client disconnected from: ${hostId}`);
     }
   });
 });

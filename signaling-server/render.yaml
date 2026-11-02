@@ -8,3 +8,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
+      # ログインのトークンの署名鍵。Render が、デプロイのときにランダムな値を作る(リポジトリには書かない)
+      - key: JWT_SECRET
+        generateValue: true

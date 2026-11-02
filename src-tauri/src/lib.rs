@@ -38,6 +38,7 @@ async fn start_host(
     let _ = stop_host().await;
 
     std::println!("[Rust] Initializing native C++ engine...");
+    let app_for_dialog = app.clone();//接続の許可ダイアログを出すために、とっておく
     ffi::init_engine(app)?;//C++エンジン初期化
 
     let displays = ffi::list_displays().unwrap_or_default();
@@ -79,6 +80,9 @@ async fn start_host(
             .as_millis()
     );
 
+    // 接続の許可ダイアログの答え(許可 = true)を、WebSocket のループに戻すための通り道
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<bool>();
+
     let mut ctx = signaling::SessionContext {
         displays,
         adapter_idx,
@@ -88,6 +92,13 @@ async fn start_host(
         fps,
         device_name,
         instance_id,
+        app: app_for_dialog,
+        approval_tx,
+        client_present: false,
+        approval_pending: false,
+        approved: false,
+        latest_who: String::new(),
+        pending_who: String::new(),
     };
 
     tokio::spawn(async move {
@@ -129,6 +140,11 @@ async fn start_host(
                         std::println!("[Rust WS] Send failed: {}", e);
                         break;
                     }
+                }
+
+                // 接続の許可ダイアログの答え
+                Some(allowed) = approval_rx.recv() => {
+                    signaling::on_approval(allowed, &mut ctx, &mut write).await;
                 }
 
                 msg_res = read.next() => {

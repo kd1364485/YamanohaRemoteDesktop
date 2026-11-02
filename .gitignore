@@ -399,3 +399,10 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# 公開してはいけないもの・生成物(履歴から削除済み。再び追跡しないための設定)
+native/build/
+dist/
+.netlify/
+signaling-server/data.db
+*.dmp

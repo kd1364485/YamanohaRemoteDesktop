@@ -1,0 +1,251 @@
+﻿========================================
+  FramePipeline ベンチ: 15 秒 x 3 回, 60 fps, 4000 kbps
+========================================
+タイマーの粒度: 1 ms に設定
+実行環境: セッション 4, WindowStation=WinSta0, Desktop=Default
+[DisplayManager] --- アダプタと出力の列挙開始 ---
+アダプタ [0] : NVIDIA GeForce RTX 3060 Laptop GPU (Vendor: NVIDIA, LUID: 00000000-0001217C)
+  出力 [0] : \\.\DISPLAY1 (Attached: Yes, Coordinates: 0,0 to 1920,1080)
+アダプタ [1] : Intel(R) Iris(R) Xe Graphics (Vendor: Intel, LUID: 00000000-00011CC1)
+[DisplayManager] --- アダプタと出力の列挙終了 (1 台) ---
+
+  [0] \\.\DISPLAY1  1920x1080  60 Hz  GPU: NVIDIA GeForce RTX 3060 Laptop GPU (NVIDIA, adapter 0)  <- プライマリ
+  → ディスプレイ [0] を測定します
+
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 3060 Laptop GPU)
+[DesktopDuplicator] Desktop Duplication 非サポート環境 (GPU=000002975D073210, 出力アダプタとデバイスが一致しない可能性)
+[DesktopDuplicator] デバッグ用フォールバックモード（ダミーテクスチャ）で起動します。
+[DesktopDuplicator] フォールバックモード初期化成功: 1920 x 1080
+[DesktopDuplicator] シャットダウン完了
+
+*** 注意: Desktop Duplication が使えないため、ダミー画像で測定します。キャプチャ取得の数字は無効です(GPU 間コピー・エンコード・送信は有効)。***
+
+[DesktopDuplicator] シャットダウン完了
+[23.6s] 送信側が offer を出力(1180 文字)
+[23.6s] WebRTC 接続(ループバック)確立  ← 起動から接続までの時間
+
+################ 測定 1 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 3060 Laptop GPU (index=0), 出力=0, 1920 x 1080
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 3060 Laptop GPU)
+[DesktopDuplicator] Desktop Duplication 非サポート環境 (GPU=0000029761448770, 出力アダプタとデバイスが一致しない可能性)
+[DesktopDuplicator] デバッグ用フォールバックモード（ダミーテクスチャ）で起動します。
+[DesktopDuplicator] フォールバックモード初期化成功: 1920 x 1080
+[CaptureEngine] Desktop Duplication がフォールバックモードで動作中
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 3060 Laptop GPU (VRAM: 5994 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: Intel(R) Iris(R) Xe Graphics (VRAM: 128 MB, ベンダー: 0x8086)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 3060 Laptop GPU (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 0000029761751F70
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 1920 x 1080 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 1920 x 1080, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[FramePipeline] staging texture created: 1920x1080, rotation=1
+[FramePipeline] health capture=113 submit=113 encode=112 sent=112 send_fail=0 in_flight=1 queued=0
+2026-11-02 13:42:54.629 WARN  [7692] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 458 (over 1 seconds)
+[FramePipeline] health capture=225 submit=225 encode=225 sent=225 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:42:55.644 WARN  [30292] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 463 (over 1 seconds)
+2026-11-02 13:42:56.656 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 463 (over 1 seconds)
+[FramePipeline] health capture=338 submit=338 encode=338 sent=338 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:42:57.667 WARN  [34292] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 463 (over 1 seconds)
+2026-11-02 13:42:58.681 WARN  [24488] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 398 (over 1 seconds)
+[FramePipeline] health capture=428 submit=428 encode=428 sent=428 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:42:59.687 WARN  [28408] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 297 (over 1 seconds)
+2026-11-02 13:43:00.688 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 326 (over 1 seconds)
+[FramePipeline] health capture=512 submit=512 encode=512 sent=512 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:01.689 WARN  [5700] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 362 (over 1 seconds)
+2026-11-02 13:43:02.699 WARN  [38956] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 358 (over 1 seconds)
+[FramePipeline] health capture=595 submit=595 encode=594 sent=594 send_fail=0 in_flight=1 queued=0
+2026-11-02 13:43:03.715 WARN  [24488] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 309 (over 1 seconds)
+2026-11-02 13:43:04.719 WARN  [5700] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 313 (over 1 seconds)
+[FramePipeline] health capture=669 submit=669 encode=669 sent=669 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:05.729 WARN  [7200] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 295 (over 1 seconds)
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       710      7266      6101     12188     13525     16907
+  2 GPU 間コピー (CopyToEncodeTexture)     710      4283      2997      7265      8505      9031
+  3 エンコード (SubmitFrame, 同期)      710       355       310       563       802      1526
+  4 完了フレームの取り出し          709      5843      3999     10098     11113     14061
+  5 送信キューでの待ち                709        16        13        38        67       173
+  6 送信呼び出し (PushVideoFrame)        709       306       235       578       906      1499
+  合計: キャプチャ開始 → 送信呼び出し完了     709     18094     16130     28670     31814     34372
+
+  送信できたフレーム: 709  → 47.0 FPS
+  エンコード後の合計: 5.69 MB  → 3014 kbps(平均)
+  フレームサイズ: 平均 8022 B / p50 7942 B / 最大 12951 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 144  平均 368  p50 364  p95 558  p99 679  最大 731
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+
+################ 測定 2 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 3060 Laptop GPU (index=0), 出力=0, 1920 x 1080
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 3060 Laptop GPU)
+[DesktopDuplicator] Desktop Duplication 非サポート環境 (GPU=000002975D1D58A0, 出力アダプタとデバイスが一致しない可能性)
+[DesktopDuplicator] デバッグ用フォールバックモード（ダミーテクスチャ）で起動します。
+[DesktopDuplicator] フォールバックモード初期化成功: 1920 x 1080
+[CaptureEngine] Desktop Duplication がフォールバックモードで動作中
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 3060 Laptop GPU (VRAM: 5994 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: Intel(R) Iris(R) Xe Graphics (VRAM: 128 MB, ベンダー: 0x8086)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 3060 Laptop GPU (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+2026-11-02 13:43:06.742 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 263 (over 1 seconds)
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 000002975D11A410
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 1920 x 1080 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 1920 x 1080, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[FramePipeline] staging texture created: 1920x1080, rotation=1
+2026-11-02 13:43:07.813 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 295 (over 1 seconds)
+[FramePipeline] health capture=70 submit=70 encode=70 sent=70 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:08.828 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 295 (over 1 seconds)
+2026-11-02 13:43:09.878 WARN  [7200] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 303 (over 1 seconds)
+[FramePipeline] health capture=146 submit=146 encode=146 sent=146 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:10.893 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 321 (over 1 seconds)
+2026-11-02 13:43:11.898 WARN  [7200] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 311 (over 1 seconds)
+[FramePipeline] health capture=221 submit=221 encode=221 sent=221 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:12.900 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 303 (over 1 seconds)
+2026-11-02 13:43:13.915 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 291 (over 1 seconds)
+[FramePipeline] health capture=294 submit=294 encode=294 sent=294 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:14.924 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 311 (over 1 seconds)
+2026-11-02 13:43:15.930 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 316 (over 1 seconds)
+[FramePipeline] health capture=368 submit=368 encode=368 sent=368 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:16.939 WARN  [24488] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 310 (over 1 seconds)
+2026-11-02 13:43:17.942 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 310 (over 1 seconds)
+[FramePipeline] health capture=445 submit=445 encode=444 sent=444 send_fail=0 in_flight=1 queued=0
+2026-11-02 13:43:18.956 WARN  [4824] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 303 (over 1 seconds)
+2026-11-02 13:43:19.962 WARN  [4824] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 297 (over 1 seconds)
+[FramePipeline] health capture=517 submit=517 encode=517 sent=517 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:20.993 WARN  [7200] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 304 (over 1 seconds)
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       555      8275      7664     13340     15516     18280
+  2 GPU 間コピー (CopyToEncodeTexture)     555      6165      6443      7628     11339     18211
+  3 エンコード (SubmitFrame, 同期)      555       390       308       607      1558      5526
+  4 完了フレームの取り出し          554      8833      9464     11111     13237     28876
+  5 送信キューでの待ち                554        21        15        53        97       321
+  6 送信呼び出し (PushVideoFrame)        554       294       224       683       927      1304
+  合計: キャプチャ開始 → 送信呼び出し完了     554     24012     23997     31460     37687     48886
+
+  送信できたフレーム: 554  → 36.8 FPS
+  エンコード後の合計: 4.46 MB  → 2370 kbps(平均)
+  フレームサイズ: 平均 8051 B / p50 7962 B / 最大 12817 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 138  平均 466  p50 426  p95 749  p99 885  最大 937
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+
+################ 測定 3 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 3060 Laptop GPU (index=0), 出力=0, 1920 x 1080
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+2026-11-02 13:43:22.009 WARN  [7692] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 260 (over 1 seconds)
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 3060 Laptop GPU)
+[DesktopDuplicator] Desktop Duplication 非サポート環境 (GPU=000002975D1D59B0, 出力アダプタとデバイスが一致しない可能性)
+[DesktopDuplicator] デバッグ用フォールバックモード（ダミーテクスチャ）で起動します。
+[DesktopDuplicator] フォールバックモード初期化成功: 1920 x 1080
+[CaptureEngine] Desktop Duplication がフォールバックモードで動作中
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 3060 Laptop GPU (VRAM: 5994 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: Intel(R) Iris(R) Xe Graphics (VRAM: 128 MB, ベンダー: 0x8086)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 3060 Laptop GPU (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 3060 Laptop GPU
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 000002976181CF60
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 1920 x 1080 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 1920 x 1080, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[FramePipeline] staging texture created: 1920x1080, rotation=1
+2026-11-02 13:43:23.209 WARN  [6732] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 303 (over 1 seconds)
+[FramePipeline] health capture=69 submit=69 encode=69 sent=69 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:24.213 WARN  [7692] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 279 (over 1 seconds)
+2026-11-02 13:43:25.232 WARN  [4824] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 289 (over 1 seconds)
+[FramePipeline] health capture=141 submit=141 encode=141 sent=141 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:26.243 WARN  [26552] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 294 (over 1 seconds)
+2026-11-02 13:43:27.246 WARN  [42944] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 337 (over 1 seconds)
+[FramePipeline] health capture=221 submit=221 encode=221 sent=221 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:28.248 WARN  [4824] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 321 (over 1 seconds)
+2026-11-02 13:43:29.249 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 296 (over 1 seconds)
+[FramePipeline] health capture=297 submit=297 encode=296 sent=296 send_fail=0 in_flight=1 queued=0
+2026-11-02 13:43:30.260 WARN  [5700] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 333 (over 1 seconds)
+2026-11-02 13:43:31.274 WARN  [26552] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 310 (over 1 seconds)
+[FramePipeline] health capture=374 submit=374 encode=373 sent=373 send_fail=0 in_flight=1 queued=0
+2026-11-02 13:43:32.289 WARN  [33700] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 305 (over 1 seconds)
+2026-11-02 13:43:33.306 WARN  [7200] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 311 (over 1 seconds)
+[FramePipeline] health capture=447 submit=447 encode=447 sent=447 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:34.319 WARN  [34292] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 304 (over 1 seconds)
+2026-11-02 13:43:35.321 WARN  [7692] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 315 (over 1 seconds)
+[FramePipeline] health capture=524 submit=524 encode=524 sent=524 send_fail=0 in_flight=0 queued=0
+2026-11-02 13:43:36.331 WARN  [7184] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 311 (over 1 seconds)
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       561      8089      7617     12755     15655     18469
+  2 GPU 間コピー (CopyToEncodeTexture)     560      5977      6448      7510     11404     17556
+  3 エンコード (SubmitFrame, 同期)      560       393       315       622      1828      6067
+  4 完了フレームの取り出し          560      8604      9375     11911     15286     29201
+  5 送信キューでの待ち                560        19        14        50        88       186
+  6 送信呼び出し (PushVideoFrame)        560       276       223       578       803      1719
+  合計: キャプチャ開始 → 送信呼び出し完了     560     23387     23824     31399     36015     51408
+
+  送信できたフレーム: 560  → 37.1 FPS
+  エンコード後の合計: 4.50 MB  → 2389 kbps(平均)
+  フレームサイズ: 平均 8040 B / p50 7949 B / 最大 12980 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 138  平均 467  p50 414  p95 794  p99 873  最大 922
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+2026-11-02 13:43:37.335 WARN  [27320] [rtc::impl::LogCounter::++::<lambda_399971a31007391ab42cca88d0179b05>::operator ()@29] Number of media packets dropped due to a full queue: 266 (over 1 seconds)

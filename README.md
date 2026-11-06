@@ -94,7 +94,10 @@ CaptureLoop ──▶ EncoderLoop ──▶ SenderLoop
 ```powershell
 # 1. C++ のコアライブラリ(依存の libdatachannel / mbedTLS は自動取得)
 cmake -S native -B native/build
-cmake --build native/build --config Release
+# 依存の mbedTLS を先に作る(個別のターゲットを指定するとき、リンクの順番のため)
+cmake --build native/build --config Release --target mbedcrypto mbedx509 mbedtls
+cmake --build native/build --config Release --target yamanoha_core
+# 注: `cmake --build` をターゲット指定なしで実行すると、`capture_test.cpp` がコンパイルできず失敗する(既知の問題。下記)
 
 # 2. ホストアプリ(Tauri)
 npm install
@@ -120,14 +123,16 @@ npm start          # 既定のポートは 8080(環境変数 PORT で変更)
 
 ### テスト
 
-`native/test/` に 4 つのテスト用プログラムがあります。
+`native/test/` に、次のプログラムがあります。
 
 | ファイル | 内容 |
 |---|---|
-| `capture_test.cpp` | 画面キャプチャ |
+| `capture_test.cpp` | 画面キャプチャ(**今のコードではコンパイルできない**) |
 | `encode_test.cpp` | キャプチャからエンコードまで |
 | `webrtc_test.cpp` | WebRTC 配信の統合テスト |
-| `pipeline_primitives_test.cpp` | 動的ビットレート制御と `BlockingQueue`(GPU 不要) |
+| `pipeline_primitives_test.cpp` | 動的ビットレート制御と `BlockingQueue`(GPU 不要。`assert` を使うので **Release ビルドでは何も検証しない**) |
+| `pipeline_bench.cpp` | **本物の `FramePipeline` を動かして、段階ごとの所要時間・FPS・データチャネルの往復時間を測る**(2026/11/02 追加。結果は [docs/performance.md](docs/performance.md)) |
+| `dd_probe.cpp` | Desktop Duplication が、その PC で使えるかを調べる診断用プログラム |
 
 ## 開発の流れ(コミット履歴より)
 
@@ -142,8 +147,16 @@ npm start          # 既定のポートは 8080(環境変数 PORT で変更)
 
 ## 現状の制限と今後
 
-- **性能の測定値は、まだありません。** エンドツーエンドの遅延(キャプチャからクライアント表示まで)、FPS、各段階の処理時間を測り、ボトルネックを数値で示すのが、次にやることです。パイプラインには処理段階ごとのカウンタ(`captured` / `encoded` / `sent` など)があるので、それを土台にできます。
-- GPU をまたぐコピーが CPU 経由なので、ハイブリッド GPU 環境では、ここが遅延の候補です(未測定)。
+- **性能を測った(2026/11/02)。詳細と限界は [docs/performance.md](docs/performance.md)。** ただし、**測定に使った PC では Desktop Duplication が使えず、ダミー画像で測っている**ため、本物の画面のキャプチャ時間と FPS は、まだ測れていない。ダミー画像でも有効だった段階の数字(1080p、60 fps 目標、NVENC):
+  - GPU 間コピー: p50 約 2.5 ms、p95 約 8 ms(**同じ GPU でも、必ず CPU を経由する**。カーソルを CPU 側で合成しているため)
+  - エンコード完了の待ち: p50 約 4.7 ms
+  - 送信キュー + 送信呼び出し: 約 0.2 ms
+  - ホスト内の合計(取得開始 → 送信呼び出し完了): p50 約 13.6 〜 14.1 ms
+  - データチャネルの往復(同一 PC 内): p50 約 0.35 ms
+- **未測定**: 本物の画面のキャプチャ、画面が変わってからクライアントに映るまでの遅延(別の端末が要る)。
+- **この PC では、Desktop Duplication が `DXGI_ERROR_UNSUPPORTED` で失敗する**(全アダプタ・全出力の組み合わせ)。そのとき FramePipeline は黙ってダミー画像に切り替わり、画面が配信されない。原因は確定していない(Optimus 構成で、DXGI の出力の見え方が食い違っている可能性)。診断は `dd_probe`。
+- FPS が、60 fps の目標に対して約 36(ダミー画像のモード)にとどまった。タイマー粒度(`sleep_for`)の影響を疑ったが、確認できていない。
+- WebRTC の接続開始が、ICE 候補の収集の完了待ちで、0.1 〜 約 24 秒かかることがあった(`WebrtcStreamer` は、収集が終わるまで Offer を出さない)。
 - 自動テストは、GPU を使わない部分(ビットレート制御とキュー)に限られます。キャプチャとエンコードのテストは、実機の GPU が必要な手動のものです。
 - `signaling-server/README.md` のプロトコル表は、WebSocket でフレームを送っていた初期の設計のままで、現在の WebRTC 方式(`webrtc-offer` / `webrtc-answer` / `webrtc-ice` など)に追いついていません。
 - Windows 専用です。

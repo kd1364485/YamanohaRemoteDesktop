@@ -9,10 +9,12 @@
 #include "gpu/d3d11_device.h"
 #include "pipeline/adaptive_bitrate_controller.h"
 #include "pipeline/blocking_queue.h"
+#include "pipeline/stage_stats.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -50,6 +52,11 @@ public:
     void RequestKeyFrame();
     void OnBitrateEstimate(uint32_t bitrate_bps);
 
+#ifdef YAMANOHA_STAGE_STATS
+    // 測定用: 段階ごとの所要時間を表示する(test/pipeline_bench.cpp から呼ぶ)
+    void PrintStageStats() const { stats_.Print(); }
+#endif
+
 private:
     struct SubmittedFrame {
         ID3D11Texture2D* texture = nullptr;
@@ -59,6 +66,9 @@ private:
     struct EncodedFrame {
         std::vector<uint8_t> data;
         uint64_t timestamp_us = 0;
+#ifdef YAMANOHA_STAGE_STATS
+        std::chrono::steady_clock::time_point enqueued_at{};  // 測定用: 送信キューに入れた時刻
+#endif
     };
 
     bool InitializeCapture(const Display& display);//キャプチャデバイス＋DesktopDuplicator
@@ -113,6 +123,10 @@ private:
 
     BlockingQueue<EncodedFrame> encoded_frames_;
     AdaptiveBitrateController bitrate_controller_;
+
+#ifdef YAMANOHA_STAGE_STATS
+    StageStats stats_;  // 測定用: 段階ごとの所要時間
+#endif
 
     std::thread capture_thread_;
     std::thread encoder_thread_;

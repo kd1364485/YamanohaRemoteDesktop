@@ -120,6 +120,9 @@ void FramePipeline::StartThreads() {
     }
 
     encoded_frames_.Reset();
+#ifdef YAMANOHA_STAGE_STATS
+    stats_.Reset();
+#endif
     // 3つのワーカースレッドを起動: キャプチャ → エンコード → 送信
     capture_thread_ = std::thread(&FramePipeline::CaptureLoop, this);
     encoder_thread_ = std::thread(&FramePipeline::EncoderLoop, this);
@@ -351,15 +354,21 @@ void FramePipeline::CaptureLoop() {
 
         // バックログ（処理遅延）がある場合はスキップして遅延が蓄積しないようにする
         if (IsBacklogged()) {
+            YAMANOHA_STAT_COUNT(stats_, BacklogSkip);
             std::this_thread::sleep_for(kIdleWait);
             continue;
         }
 
         // Desktop Duplication からフレームを取得（タイムアウト0 = 即座にリターン）
         CapturedFrame captured_frame{};
+        YAMANOHA_STAT_BEGIN(t_acquire);
         if (!capture_engine_->AcquireFrame(captured_frame, 0)) {
+            YAMANOHA_STAT_COUNT(stats_, AcquireMiss);
             std::this_thread::sleep_for(kIdleWait);
             continue;
+        }
+        if (captured_frame.has_new_frame) {
+            YAMANOHA_STAT_END(stats_, Acquire, t_acquire);
         }
 
         // 周期キーフレームが必要かどうかを先に判定
@@ -390,8 +399,10 @@ void FramePipeline::CaptureLoop() {
         }
 
         // クロスアダプタコピー: キャプチャGPU → CPU（ステージング） → カーソル合成 → エンコードGPU
+        YAMANOHA_STAT_BEGIN(t_copy);
         const bool copied = CopyToEncodeTexture(
             captured_frame.texture.Get(), encode_texture);
+        YAMANOHA_STAT_END(stats_, Copy, t_copy);
         capture_engine_->ReleaseFrame();  // Desktop Duplication のフレームを解放
         if (!copied) {
             ReturnEncodeTexture(encode_texture);  // テクスチャをプールに戻す
@@ -413,8 +424,10 @@ void FramePipeline::CaptureLoop() {
         // エンコーダにフレームを投入
         // ※ submitted_mutex_ を保持したまま SubmitFrame を呼ぶと
         //    同期モードで EncoderLoop がドレインできずデッドロックするため注意
+        YAMANOHA_STAT_BEGIN(t_submit);
         const int frame_id = encoder_->SubmitFrame(
             encode_texture, force_key_frame);
+        YAMANOHA_STAT_END(stats_, Submit, t_submit);
         if (frame_id < 0) {
             // エンコード失敗: テクスチャをプールに戻して再試行を要求
             ReturnEncodeTexture(encode_texture);
@@ -477,6 +490,7 @@ void FramePipeline::EncoderLoop() {
         std::vector<uint8_t> bitstream;
         ID3D11Texture2D* completed_texture = nullptr;
         int completed_frame_id = 0;
+        YAMANOHA_STAT_BEGIN(t_poll);
         if (!encoder_->GetCompletedFrame(
                 bitstream,
                 &completed_texture,
@@ -484,6 +498,7 @@ void FramePipeline::EncoderLoop() {
                 kEncoderPollTimeoutUs)) {
             continue;
         }
+        YAMANOHA_STAT_END(stats_, EncodeWait, t_poll);
 
         // エンコード完了したテクスチャを submitted_frames_ から回収し、プールに戻す
         const auto submitted = RemoveSubmittedFrame(completed_frame_id);
@@ -494,10 +509,14 @@ void FramePipeline::EncoderLoop() {
 
         // エンコード済みフレームを送信キューに追加
         encoded_count_.fetch_add(1, std::memory_order_relaxed);
-        encoded_frames_.Push(EncodedFrame{
+        EncodedFrame encoded{
             std::move(bitstream),
             submitted->timestamp_us,
-        });
+        };
+#ifdef YAMANOHA_STAGE_STATS
+        encoded.enqueued_at = std::chrono::steady_clock::now();
+#endif
+        encoded_frames_.Push(std::move(encoded));
     }
 }
 
@@ -551,10 +570,25 @@ void FramePipeline::SenderLoop() {
         }
 
         // WebRTC経由でH.264フレームを送信
-        if (!streamer_->PushVideoFrame(
-                frame.data.data(),
-                frame.data.size(),
-                frame.timestamp_us)) {
+#ifdef YAMANOHA_STAGE_STATS
+        stats_.AddSince(Stage::QueueWait, frame.enqueued_at);
+#endif
+        YAMANOHA_STAT_BEGIN(t_push);
+        const bool pushed = streamer_->PushVideoFrame(
+            frame.data.data(),
+            frame.data.size(),
+            frame.timestamp_us);
+        YAMANOHA_STAT_END(stats_, Push, t_push);
+#ifdef YAMANOHA_STAGE_STATS
+        if (pushed) {
+            // 送信に成功したフレームだけを、FPS・ビットレート・合計時間に数える
+            stats_.AddSinceMicros(Stage::CaptureToSend, frame.timestamp_us);
+            stats_.Add(Stage::FrameBytes, static_cast<double>(frame.data.size()));
+        } else {
+            stats_.Count(Counter::PushFail);
+        }
+#endif
+        if (!pushed) {
             // 送信失敗: 次フレームをキーフレームにしてデコーダに再同期させる
             send_failure_count_.fetch_add(1, std::memory_order_relaxed);
             RequestKeyFrame();

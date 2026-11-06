@@ -139,6 +139,28 @@ if(MSVC)
     target_compile_options(webrtc_test PRIVATE /utf-8)
 endif()
 
+# ベンチマーク (本物の FramePipeline を動かして、段階ごとの所要時間を測る)
+# YAMANOHA_STAGE_STATS を定義したビルドでだけ、測定用のコードが有効になる。
+add_executable(pipeline_bench
+    test/pipeline_bench.cpp
+    src/gpu/d3d11_device.cpp
+    src/capture/display_manager.cpp
+    src/capture/desktop_duplicator.cpp
+    src/capture/capture_engine.cpp
+    src/capture/cursor_cpu_compositor.cpp
+    src/encoder/nvenc_encoder.cpp
+    src/encoder/mf_encoder.cpp
+    src/pipeline/adaptive_bitrate_controller.cpp
+    src/pipeline/frame_pipeline.cpp
+    src/webrtc/webrtc_streamer.cpp
+)
+target_include_directories(pipeline_bench PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(pipeline_bench PRIVATE ${LIBS} datachannel winmm)
+target_compile_definitions(pipeline_bench PRIVATE YAMANOHA_STAGE_STATS)
+if(MSVC)
+    target_compile_options(pipeline_bench PRIVATE /utf-8)
+endif()
+
 add_executable(pipeline_primitives_test
     test/pipeline_primitives_test.cpp
     src/pipeline/adaptive_bitrate_controller.cpp
@@ -146,4 +168,11 @@ add_executable(pipeline_primitives_test
 target_include_directories(pipeline_primitives_test PRIVATE src)
 if(MSVC)
     target_compile_options(pipeline_primitives_test PRIVATE /utf-8)
+endif()
+
+# Desktop Duplication が使えるかを調べる診断用プログラム (依存は Windows SDK のみ)
+add_executable(dd_probe test/dd_probe.cpp)
+target_link_libraries(dd_probe PRIVATE d3d11 dxgi user32)
+if(MSVC)
+    target_compile_options(dd_probe PRIVATE /utf-8)
 endif()

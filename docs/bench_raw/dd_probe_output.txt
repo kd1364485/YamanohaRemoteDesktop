@@ -1,0 +1,21 @@
+# dd_probe.exe の出力 (2026-11-02、この PC。コンソールの文字コードの都合で、日本語が崩れる場合は chcp 932 の出力)
+
+アダプタ[0] NVIDIA GeForce RTX 3060 Laptop GPU  (LUID 00000000-0001217C, flags=0x0)
+   D3D11 デバイス作成: 0x00000000
+   出力[0] \\.\DISPLAY1  1920x1080  attached=1  rotation=1
+      ColorSpace=0  BitsPerColor=8  (HDR なら ColorSpace=12 など)
+アダプタ[1] Intel(R) Iris(R) Xe Graphics  (LUID 00000000-00011CC1, flags=0x0)
+   D3D11 デバイス作成: 0x00000000
+アダプタ[2] Microsoft Basic Render Driver  (LUID 00000000-000120F3, flags=0x2)
+   D3D11 デバイス作成: 0x00000000
+
+--- DuplicateOutput の総当たり(デバイスのアダプタ × 出力のアダプタ) ---
+出力(adapter 0, output 0) × デバイス[0] NVIDIA GeForce RTX 3060 Laptop GPU
+   DuplicateOutput  → 0x887A0004 DXGI_ERROR_UNSUPPORTED
+   DuplicateOutput1 → 0x887A0004 DXGI_ERROR_UNSUPPORTED
+出力(adapter 0, output 0) × デバイス[1] Intel(R) Iris(R) Xe Graphics
+   DuplicateOutput  → 0x887A0004 DXGI_ERROR_UNSUPPORTED
+   DuplicateOutput1 → 0x887A0004 DXGI_ERROR_UNSUPPORTED
+出力(adapter 0, output 0) × デバイス[2] Microsoft Basic Render Driver
+   DuplicateOutput  → 0x887A0004 DXGI_ERROR_UNSUPPORTED
+   DuplicateOutput1 → 0x887A0004 DXGI_ERROR_UNSUPPORTED

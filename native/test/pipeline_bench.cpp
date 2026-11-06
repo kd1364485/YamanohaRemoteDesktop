@@ -215,6 +215,9 @@ int main(int argc, char* argv[]) {
     rtc::Description::Video receive_video("video", rtc::Description::Direction::RecvOnly);
     receive_video.addH264Codec(96);
     auto receive_track = receiver->addTrack(receive_video);
+    // 受け取ったパケットを読み出して捨てる。読まないと受信側のキューが溢れ、
+    // libdatachannel が「dropped due to a full queue」を毎秒 200〜300 件出していた(2026/11/06 に確認)。
+    receive_track->onMessage([](rtc::message_variant) {});
     receiver->onTrack([](std::shared_ptr<rtc::Track> t) {
         std::printf("[受信側] トラックを受け取った: mid=%s\n", t->mid().c_str());
     });

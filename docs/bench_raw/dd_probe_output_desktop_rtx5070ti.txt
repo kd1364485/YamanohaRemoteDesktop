@@ -1,0 +1,19 @@
+アダプタ[0] NVIDIA GeForce RTX 5070 Ti  (LUID 00000000-00012300, flags=0x0)
+   D3D11 デバイス作成: 0x00000000
+   出力[0] \\.\DISPLAY1  2560x1600  attached=1  rotation=1
+      ColorSpace=0  BitsPerColor=8  (HDR なら ColorSpace=12 など)
+アダプタ[1] AMD Radeon(TM) Graphics  (LUID 00000000-0001373C, flags=0x0)
+   D3D11 デバイス作成: 0x00000000
+アダプタ[2] Microsoft Basic Render Driver  (LUID 00000000-000136C6, flags=0x2)
+   D3D11 デバイス作成: 0x00000000
+
+--- DuplicateOutput の総当たり(デバイスのアダプタ × 出力のアダプタ) ---
+出力(adapter 0, output 0) × デバイス[0] NVIDIA GeForce RTX 5070 Ti
+   DuplicateOutput  → 0x00000000 S_OK
+   DuplicateOutput1 → 0x80070057 E_INVALIDARG
+出力(adapter 0, output 0) × デバイス[1] AMD Radeon(TM) Graphics
+   DuplicateOutput  → 0x80070057 E_INVALIDARG
+   DuplicateOutput1 → 0x80070057 E_INVALIDARG
+出力(adapter 0, output 0) × デバイス[2] Microsoft Basic Render Driver
+   DuplicateOutput  → 0x80070057 E_INVALIDARG
+   DuplicateOutput1 → 0x80070057 E_INVALIDARG

@@ -1,0 +1,273 @@
+========================================
+  FramePipeline ベンチ: 15 秒 x 3 回, 60 fps, 4000 kbps
+========================================
+タイマーの粒度: 1 ms に設定
+実行環境: セッション 37, WindowStation=WinSta0, Desktop=Default
+[DisplayManager] --- アダプタと出力の列挙開始 ---
+アダプタ [0] : NVIDIA GeForce RTX 5070 Ti (Vendor: NVIDIA, LUID: 00000000-00012300)
+  出力 [0] : \\.\DISPLAY1 (Attached: Yes, Coordinates: 0,0 to 2560,1600)
+アダプタ [1] : AMD Radeon(TM) Graphics (Vendor: AMD, LUID: 00000000-0001373C)
+[DisplayManager] --- アダプタと出力の列挙終了 (1 台) ---
+
+  [0] \\.\DISPLAY1  2560x1600  60 Hz  GPU: NVIDIA GeForce RTX 5070 Ti (NVIDIA, adapter 0)  <- プライマリ
+  → ディスプレイ [0] を測定します
+
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 5070 Ti)
+[DesktopDuplicator] 初期化成功: 2560 x 1600 (出力 0)
+[DesktopDuplicator] シャットダウン完了
+事前確認: 本物の画面を取得できます(Desktop Duplication)
+
+[DesktopDuplicator] シャットダウン完了
+2026-11-06 14:41:01.194 INFO  [70264] [rtc::impl::IceTransport::IceTransport@110] Using STUN server "stun1.l.google.com:19302"
+2026-11-06 14:41:01.194 INFO  [70264] [rtc::impl::PeerConnection::changeSignalingState@1395] Changed signaling state to have-local-offer
+2026-11-06 14:41:01.194 INFO  [70264] [rtc::impl::PeerConnection::changeGatheringState@1382] Changed gathering state to in-progress
+2026-11-06 14:41:01.194 INFO  [70264] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to gathering
+2026-11-06 14:41:01.198 INFO  [70264] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to connecting
+2026-11-06 14:41:01.198 INFO  [70264] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to checking
+2026-11-06 14:41:01.198 INFO  [70264] [rtc::impl::PeerConnection::changeState@1346] Changed state to connecting
+[WebrtcStreamer] PeerConnection state: Connecting
+2026-11-06 14:41:01.206 INFO  [58332] [rtc::impl::IceTransport::LogCallback@391] juice: Using STUN server stun1.l.google.com:19302
+2026-11-06 14:41:01.214 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: STUN server binding successful
+2026-11-06 14:41:01.214 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Got STUN mapped address x.x.x.x from server
+2026-11-06 14:41:01.214 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Candidate gathering done
+2026-11-06 14:41:01.214 INFO  [26220] [rtc::impl::PeerConnection::changeGatheringState@1382] Changed gathering state to complete
+[0.0s] 送信側が offer を出力(1071 文字)
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::PeerConnection::changeSignalingState@1395] Changed signaling state to have-remote-offer
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::PeerConnection::changeSignalingState@1395] Changed signaling state to stable
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::PeerConnection::changeGatheringState@1382] Changed gathering state to in-progress
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to gathering
+2026-11-06 14:41:01.214 INFO  [32848] [rtc::impl::IceTransport::LogCallback@391] juice: Connectivity timer started
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to connecting
+2026-11-06 14:41:01.214 INFO  [32848] [rtc::impl::PeerConnection::changeSignalingState@1395] Changed signaling state to stable
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to checking
+2026-11-06 14:41:01.214 INFO  [16888] [rtc::impl::PeerConnection::changeState@1346] Changed state to connecting
+2026-11-06 14:41:01.215 INFO  [16888] [rtc::impl::IceTransport::LogCallback@391] juice: Candidate gathering done
+2026-11-06 14:41:01.215 INFO  [16888] [rtc::impl::IceTransport::LogCallback@391] juice: Connectivity timer started
+2026-11-06 14:41:01.215 INFO  [16888] [rtc::impl::PeerConnection::changeGatheringState@1382] Changed gathering state to complete
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to connected
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to connected
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::PeerConnection::initDtlsTransport@276] This connection requires media support
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to connected
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to connected
+2026-11-06 14:41:01.215 INFO  [26220] [rtc::impl::PeerConnection::initDtlsTransport@276] This connection requires media support
+2026-11-06 14:41:01.215 INFO  [57072] [rtc::impl::IceTransport::LogCallback@391] juice: IP Differentiated Services are not supported on Windows
+2026-11-06 14:41:01.216 INFO  [57072] [rtc::impl::IceTransport::LogCallback@391] juice: IP Differentiated Services are not supported on Windows
+2026-11-06 14:41:01.219 INFO  [66624] [rtc::impl::DtlsTransport::doRecv@562] DTLS handshake finished
+2026-11-06 14:41:01.219 INFO  [50728] [rtc::impl::DtlsTransport::doRecv@562] DTLS handshake finished
+2026-11-06 14:41:01.219 INFO  [66624] [rtc::impl::DtlsSrtpTransport::postHandshake@265] Deriving SRTP keying material (Mbed TLS)
+2026-11-06 14:41:01.219 INFO  [50728] [rtc::impl::DtlsSrtpTransport::postHandshake@265] Deriving SRTP keying material (Mbed TLS)
+2026-11-06 14:41:01.220 INFO  [47320] [rtc::impl::SctpTransport::processNotification@872] SCTP connected
+2026-11-06 14:41:01.220 INFO  [47320] [rtc::impl::PeerConnection::changeState@1346] Changed state to connected
+2026-11-06 14:41:01.220 INFO  [45288] [rtc::impl::SctpTransport::processNotification@872] SCTP connected
+2026-11-06 14:41:01.220 INFO  [45288] [rtc::impl::PeerConnection::changeState@1346] Changed state to connected
+[WebrtcStreamer] PeerConnection state: Connected
+[WebrtcStreamer] DataChannel opened: input
+2026-11-06 14:41:01.275 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to completed
+2026-11-06 14:41:01.275 INFO  [26220] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to completed
+2026-11-06 14:41:01.275 INFO  [26220] [rtc::impl::IceTransport::LogCallback@391] juice: Changing state to completed
+2026-11-06 14:41:01.275 INFO  [26220] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to completed
+[0.1s] WebRTC 接続(ループバック)確立  ← 起動から接続までの時間
+
+################ 測定 1 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 5070 Ti (index=0), 出力=0, 2560 x 1600
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 5070 Ti)
+[DesktopDuplicator] 初期化成功: 2560 x 1600 (出力 0)
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 5070 Ti (VRAM: 15995 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: AMD Radeon(TM) Graphics (VRAM: 459 MB, ベンダー: 0x1002)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 5070 Ti (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 000002E465CB13F0
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 2560 x 1600 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 2560 x 1600, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[DesktopDuplicator] テクスチャ DESC キャッシュ: 2560 x 1600, Format=87
+[FramePipeline] staging texture created: 2560x1600, rotation=1
+[FramePipeline] IDR keyframe sent (frame_id=1)
+[FramePipeline] IDR keyframe sent (frame_id=2)
+[FramePipeline] health capture=78 submit=78 encode=78 sent=78 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=130)
+[FramePipeline] health capture=150 submit=150 encode=150 sent=150 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=253 submit=253 encode=253 sent=253 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=254)
+[FramePipeline] health capture=327 submit=327 encode=327 sent=327 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=375)
+[FramePipeline] health capture=394 submit=394 encode=394 sent=394 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=499 submit=499 encode=499 sent=499 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=500)
+[FramePipeline] health capture=575 submit=575 encode=574 sent=574 send_fail=0 in_flight=1 queued=0
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       618        41        40        56        70       580
+  2 GPU 間コピー (CopyToEncodeTexture)     621      1648      1469      3330      3481      5459
+  3 エンコード (SubmitFrame, 同期)      621       143       136       178       226      1654
+  4 完了フレームの取り出し          621      4967      4605     11278     13223     15598
+  5 送信キューでの待ち                621         9         8        12        14        44
+  6 送信呼び出し (PushVideoFrame)        621       138       125       221       406       449
+  合計: キャプチャ開始 → 送信呼び出し完了     621      6966      6425     14998     17055     19278
+
+  送信できたフレーム: 621  → 41.2 FPS
+  エンコード後の合計: 3.89 MB  → 2064 kbps(平均)
+  フレームサイズ: 平均 6265 B / p50 5599 B / 最大 23531 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 150  平均 152  p50 143  p95 221  p99 258  最大 300
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+
+################ 測定 2 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 5070 Ti (index=0), 出力=0, 2560 x 1600
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 5070 Ti)
+[DesktopDuplicator] 初期化成功: 2560 x 1600 (出力 0)
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 5070 Ti (VRAM: 15995 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: AMD Radeon(TM) Graphics (VRAM: 459 MB, ベンダー: 0x1002)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 5070 Ti (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 000002E47987FF80
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 2560 x 1600 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 2560 x 1600, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[DesktopDuplicator] テクスチャ DESC キャッシュ: 2560 x 1600, Format=87
+[FramePipeline] staging texture created: 2560x1600, rotation=1
+[FramePipeline] IDR keyframe sent (frame_id=1)
+[FramePipeline] IDR keyframe sent (frame_id=2)
+[FramePipeline] health capture=91 submit=91 encode=91 sent=91 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=127)
+[FramePipeline] health capture=162 submit=162 encode=162 sent=162 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=254 submit=254 encode=254 sent=254 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=256)
+[FramePipeline] health capture=349 submit=349 encode=349 sent=349 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=385)
+[FramePipeline] health capture=416 submit=416 encode=416 sent=416 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=505 submit=505 encode=505 sent=505 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=506)
+[FramePipeline] health capture=595 submit=595 encode=595 sent=595 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=630)
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       629        42        40        57        70       920
+  2 GPU 間コピー (CopyToEncodeTexture)     630      1622      1459      3293      3465      5521
+  3 エンコード (SubmitFrame, 同期)      630       145       139       179       230      1381
+  4 完了フレームの取り出し          630      4766      4533     10695     11759     13953
+  5 送信キューでの待ち                630        10         8        13        15       277
+  6 送信呼び出し (PushVideoFrame)        630       141       128       219       422       495
+  合計: キャプチャ開始 → 送信呼び出し完了     630      6748      6380     14419     16531     17773
+
+  送信できたフレーム: 630  → 41.8 FPS
+  エンコード後の合計: 3.98 MB  → 2112 kbps(平均)
+  フレームサイズ: 平均 6320 B / p50 5598 B / 最大 23523 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 150  平均 147  p50 137  p95 210  p99 221  最大 235
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+
+################ 測定 3 / 3 ################
+[CaptureEngine] 停止しました
+[CaptureEngine] 開始: DisplayID=DISPLAY1, アダプタ=NVIDIA GeForce RTX 5070 Ti (index=0), 出力=0, 2560 x 1600
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] 対象出力: \\.\DISPLAY1 (アダプタ: NVIDIA GeForce RTX 5070 Ti)
+[DesktopDuplicator] 初期化成功: 2560 x 1600 (出力 0)
+[yamanoha][INFO] アダプタ[0]: NVIDIA GeForce RTX 5070 Ti (VRAM: 15995 MB, ベンダー: 0x10DE)
+[yamanoha][INFO] アダプタ[1]: AMD Radeon(TM) Graphics (VRAM: 459 MB, ベンダー: 0x1002)
+[FramePipeline] NVIDIA adapter: NVIDIA GeForce RTX 5070 Ti (index=0)
+[yamanoha][INFO] デバイス作成中: NVIDIA GeForce RTX 5070 Ti
+[yamanoha][INFO] D3D11デバイス作成成功 (フィーチャーレベル: 0xB100)
+[NvencEncoder] nvEncOpenEncodeSessionEx パラメータデバッグ:
+  sizeof(open_params)   : 1552
+  open_params.version   : 0x7101000C
+  open_params.device    : 000002E4660357E0
+  open_params.deviceType: 0
+  open_params.apiVersion: 0x0100000C (Expected: 0x0100000C)
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER: 0x7101000C
+[NvencEncoder] 非同期リソースプール作成: 4 セット
+[NvencEncoder] 初期化成功: 2560 x 1600 (fps: 60, CBR: 1, Bitrate: 4000 kbps)
+[FramePipeline] prepared: 2560 x 1600, 60 FPS, 4000 kbps
+[FramePipeline] worker threads started
+[DesktopDuplicator] テクスチャ DESC キャッシュ: 2560 x 1600, Format=87
+[FramePipeline] staging texture created: 2560x1600, rotation=1
+[FramePipeline] IDR keyframe sent (frame_id=1)
+[FramePipeline] IDR keyframe sent (frame_id=2)
+[FramePipeline] health capture=103 submit=103 encode=103 sent=103 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=126)
+[FramePipeline] health capture=169 submit=169 encode=169 sent=169 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=250 submit=250 encode=250 sent=250 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=252)
+[FramePipeline] health capture=352 submit=352 encode=351 sent=351 send_fail=0 in_flight=1 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=374)
+[FramePipeline] health capture=417 submit=417 encode=417 sent=417 send_fail=0 in_flight=0 queued=0
+[FramePipeline] health capture=498 submit=498 encode=498 sent=498 send_fail=0 in_flight=0 queued=0
+[FramePipeline] IDR keyframe sent (frame_id=500)
+[FramePipeline] health capture=600 submit=600 encode=600 sent=600 send_fail=0 in_flight=0 queued=0
+
+--- 段階ごとの所要時間(µs)  計測時間 15.1 秒 ---
+  段階                                    件数    平均       p50       p95       p99    最大
+  1 キャプチャ取得 (AcquireFrame)       622        42        41        56        73       789
+  2 GPU 間コピー (CopyToEncodeTexture)     622      1641      1457      3335      4101      6489
+  3 エンコード (SubmitFrame, 同期)      622       144       133       181       266      1757
+  4 完了フレームの取り出し          622      4842      4560     10960     13012     15810
+  5 送信キューでの待ち                622        10        10        13        14       122
+  6 送信呼び出し (PushVideoFrame)        622       143       129       231       406       472
+  合計: キャプチャ開始 → 送信呼び出し完了     622      6844      6405     14749     17321     19456
+
+  送信できたフレーム: 622  → 41.2 FPS
+  エンコード後の合計: 3.91 MB  → 2076 kbps(平均)
+  フレームサイズ: 平均 6291 B / p50 5606 B / 最大 23522 B
+  バックログで見送った回数: 0 / 取得できなかった回数: 0 / 送信に失敗した回数: 0
+
+--- データチャネルの往復時間(同一 PC 内のループバック、µs) ---
+  件数 150  平均 151  p50 140  p95 217  p99 241  最大 270
+[FramePipeline] stopping worker threads...
+[FramePipeline] releasing resources...
+[DesktopDuplicator] シャットダウン完了
+[DesktopDuplicator] シャットダウン完了
+[CaptureEngine] 停止しました
+[FramePipeline] stopped
+[WebrtcStreamer] DataChannel closed: input
+2026-11-06 14:41:47.571 INFO  [70264] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to closed
+2026-11-06 14:41:47.571 INFO  [70264] [rtc::impl::PeerConnection::changeState@1346] Changed state to closed
+2026-11-06 14:41:47.571 INFO  [53220] [rtc::impl::SctpTransport::processNotification@876] SCTP disconnected
+2026-11-06 14:41:47.571 INFO  [53220] [rtc::impl::PeerConnection::changeState@1346] Changed state to disconnected
+2026-11-06 14:41:47.571 INFO  [53220] [rtc::impl::PeerConnection::changeIceState@1364] Changed ICE state to closed
+2026-11-06 14:41:47.571 INFO  [53220] [rtc::impl::PeerConnection::changeState@1346] Changed state to closed
+2026-11-06 14:41:47.571 INFO  [47320] [rtc::impl::DtlsTransport::doRecv@603] DTLS closed

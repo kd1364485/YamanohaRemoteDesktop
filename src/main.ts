@@ -55,16 +55,48 @@ document.getElementById("logout-btn")?.addEventListener("click", () => {
 
 // --- Host mode ---
 
+// ホストの状態を、画面に反映する(Rust の signaling::emit_status から届く)
+type HostState = "waiting" | "asking" | "streaming" | "error";
+
+function showHostState(state: HostState, user: string): void {
+  const codeEl = document.getElementById("connection-code");
+  const detailEl = document.getElementById("host-detail");
+  const spinnerEl = document.getElementById("host-spinner");
+  const streaming = state === "streaming";
+  const text: Record<HostState, [string, string, string, string]> = {
+    // [大きい表示, 説明, ヘッダーの表示, ヘッダーの色]
+    waiting: ["待機中...", "接続を待っています...", "ホスト待機中", "yellow"],
+    asking: ["許可待ち", `${user} さんが接続しようとしています。ダイアログで許可してください`, "許可待ち", "yellow"],
+    streaming: ["配信中", `${user} さんに、この PC の画面を配信しています`, "配信中", "green"],
+    error: ["エラー", "サーバーとの接続が切れました。キャンセルして、やり直してください", "エラー", "red"],
+  };
+  const [big, detail, header, color] = text[state];
+  if (codeEl) {
+    codeEl.textContent = big;
+    codeEl.classList.toggle("text-green-400", streaming);
+    codeEl.classList.toggle("text-blue-400", !streaming);
+  }
+  if (detailEl) detailEl.textContent = detail;
+  if (spinnerEl) spinnerEl.classList.toggle("hidden", streaming);
+  setConnectionStatus(header, color);
+}
+
+// ブラウザ(スマホ)で開いたときは Tauri がないので、登録しない
+if ("__TAURI_INTERNALS__" in window) {
+  import("@tauri-apps/api/event").then(({ listen }) => {
+    listen<{ state: HostState; user: string }>("host-status", (event) => {
+      showHostState(event.payload.state, event.payload.user);
+    });
+  });
+}
+
 document.getElementById("host-btn")?.addEventListener("click", async () => {
   if (!getAuthToken()) { showView("login-view"); return; }
   showView("host-view");
-  setConnectionStatus("ホスト待機中", "yellow");
+  showHostState("waiting", "");
 
   const serverUrl = getServerUrl();
   const deviceName = "PC";
-
-  const codeEl = document.getElementById("connection-code");
-  if (codeEl) codeEl.textContent = "待機中...";
 
   // ネイティブC++エンジンを起動（画面キャプチャ + エンコード + WebRTC配信）
   try {

@@ -108,6 +108,7 @@ async fn start_host(
             Ok(val) => val,
             Err(e) => {
                 std::println!("[Rust WS] Connection failed: {}", e);
+                signaling::emit_status(&ctx.app, "error", "");
                 return;
             }
         };
@@ -153,10 +154,12 @@ async fn start_host(
                         Some(Ok(_)) => continue,
                         Some(Err(e)) => {
                             std::println!("[Rust WS] Receive error: {}", e);
+                            signaling::emit_status(&ctx.app, "error", "");
                             break;
                         }
                         None => {
                             std::println!("[Rust WS] Server disconnected");
+                            signaling::emit_status(&ctx.app, "error", "");
                             break;
                         }
                     };

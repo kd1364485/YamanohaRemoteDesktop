@@ -66,6 +66,14 @@ fn ask_permission(ctx: &mut SessionContext, user: &str, ip: &str) {
         });
 }
 
+/// ホストの画面に、今の状態を知らせる(main.ts の "host-status" で受け取る)
+/// state: "waiting"(接続待ち) / "asking"(許可ダイアログ表示中) / "streaming"(配信中) / "error"
+/// 録画や画面共有に映ることがあるので、IP は渡さず、アカウント名だけを渡す。
+pub fn emit_status(app: &tauri::AppHandle, state: &str, user: &str) {
+    use tauri::Emitter;
+    let _ = app.emit("host-status", serde_json::json!({ "state": state, "user": user }));
+}
+
 pub fn display_id(display: &ffi::YamanohaDisplayInfo) -> String {
     format!("{}:{}", display.adapter_index, display.output_index)
 }
@@ -134,6 +142,7 @@ pub async fn handle_message(
         "host-ready" => {
             let host_id = j["hostId"].as_str().unwrap_or("");
             std::println!("[Rust WS] Host ready, ID: {}", host_id);
+            emit_status(&ctx.app, "waiting", "");
         }
 
         "client-connected" => {
@@ -148,6 +157,7 @@ pub async fn handle_message(
             // すでにダイアログを出しているときは、その答えを待つ。
             // (答えが来たとき、表示した相手と、今の相手が違えば、改めて聞き直す。on_approval を参照)
             if !ctx.approval_pending {
+                emit_status(&ctx.app, "asking", &user);
                 ask_permission(ctx, &user, &ip);
             }
         }
@@ -157,6 +167,7 @@ pub async fn handle_message(
             std::println!("[Rust WS] Client disconnected");
             ctx.client_present = false;
             ctx.approved = false;
+            emit_status(&ctx.app, "waiting", "");
         }
 
         "select-display" => {
@@ -219,6 +230,7 @@ pub async fn on_approval(allowed: bool, ctx: &mut SessionContext, write: &mut Ws
     if !ctx.client_present {
         std::println!("[Rust WS] The client already left; ignoring the answer");
         ctx.approved = false;
+        emit_status(&ctx.app, "waiting", "");
         return;
     }
 
@@ -237,6 +249,7 @@ pub async fn on_approval(allowed: bool, ctx: &mut SessionContext, write: &mut Ws
         std::println!("[Rust WS] Rejected by the user");
         ctx.approved = false;
         ctx.client_present = false;//サーバーが、このクライアントを切る
+        emit_status(&ctx.app, "waiting", "");
         let _ = write
             .send(Message::Text(
                 serde_json::json!({ "type": "reject-client" }).to_string(),
@@ -265,7 +278,11 @@ pub async fn on_approval(allowed: bool, ctx: &mut SessionContext, write: &mut Ws
         DEFAULT_BITRATE_KBPS,
     ) {
         std::println!("[Rust WS] Stream start error: {}", e);
+        emit_status(&ctx.app, "error", "");
+        return;
     }
+    let user = ctx.latest_who.split(" / ").next().unwrap_or("").to_string();
+    emit_status(&ctx.app, "streaming", &user);
 }
 
 async fn handle_select_display(

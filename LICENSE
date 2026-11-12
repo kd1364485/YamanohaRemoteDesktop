@@ -19,15 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party files keep their own licenses:
-
-- native/third_party/nvcodec/nvEncodeAPI.h
-  Copyright (c) 2010-2023 NVIDIA Corporation, MIT License (see the notice at
-  the top of that file).
-
-Libraries downloaded at build time (CMake FetchContent), such as libdatachannel
-and MbedTLS, are not included in this repository and are used under their own
-licenses.

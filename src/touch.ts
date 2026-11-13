@@ -9,6 +9,31 @@ let touchStartHandler: ((e: TouchEvent) => void) | null = null;
 let touchMoveHandler: ((e: TouchEvent) => void) | null = null;
 let touchEndHandler: ((e: TouchEvent) => void) | null = null;
 
+// 遅延の測定用: URL に ?tapmark を付けて開くと、クリックを送った瞬間に、画面の左上へ赤い四角を出す。
+// スマホの画面録画だけで「クリックを送った瞬間」と「PC の画面の変化が映った瞬間」が分かる
+// (タップ → PC → 映像 → スマホ の往復遅延)。付けないときは、何もしない。
+// スマホの Chrome では URL の入力で ?tapmark が落ちやすいので、起動時の環境変数
+// VITE_TAPMARK=1 でも有効にできる(例(Git Bash): VITE_TAPMARK=1 npm run tauri dev)。
+const tapMarkEnabled =
+  new URLSearchParams(window.location.search).has("tapmark") ||
+  import.meta.env.VITE_TAPMARK === "1";
+let tapMarkTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flashTapMark(): void {
+  let mark = document.getElementById("tap-mark");
+  if (!mark) {
+    mark = document.createElement("div");
+    mark.id = "tap-mark";
+    mark.style.cssText =
+      "position:fixed;left:0;top:0;width:18vmin;height:18vmin;background:#f00;" +
+      "z-index:99999;pointer-events:none;display:none;";
+    document.body.appendChild(mark);
+  }
+  mark.style.display = "block";
+  if (tapMarkTimer) clearTimeout(tapMarkTimer);
+  tapMarkTimer = setTimeout(() => { mark!.style.display = "none"; }, 200);
+}
+
 export function detachTouchControls(): void {
   if (touchTarget) {
     if (touchStartHandler) touchTarget.removeEventListener("touchstart", touchStartHandler, { passive: false } as AddEventListenerOptions);
@@ -23,6 +48,17 @@ export function detachTouchControls(): void {
 
 export function setupTouchControls(el: HTMLElement): void {
   detachTouchControls();
+
+  // 測定モードが有効なことを、録画の前に目で確かめられるよう、右下に小さく表示する
+  if (tapMarkEnabled && !document.getElementById("tap-mark-label")) {
+    const label = document.createElement("div");
+    label.id = "tap-mark-label";
+    label.textContent = "tapmark ON";
+    label.style.cssText =
+      "position:fixed;right:4px;bottom:4px;padding:2px 6px;font:12px sans-serif;" +
+      "color:#fff;background:#c00;z-index:99999;pointer-events:none;";
+    document.body.appendChild(label);
+  }
 
   el.style.touchAction = "none";
   (el.style as any).overscrollBehavior = "none";
@@ -47,6 +83,9 @@ export function setupTouchControls(el: HTMLElement): void {
 
   const send = (obj: object) => {
     sendInput(obj);
+    if (tapMarkEnabled && (obj as { action?: string }).action === "mouse-click") {
+      flashTapMark();
+    }
   };
 
   touchStartHandler = (e: TouchEvent) => {

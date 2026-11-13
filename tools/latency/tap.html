@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>操作の往復遅延の測定(白黒反転)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: Consolas, "Courier New", monospace; }
+  #t { font-size: 22vw; line-height: 1; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+  #f { font-size: 5vw; margin-top: 2vw; color: #8f8; }
+  #hint { position: fixed; bottom: 1vw; font-size: 1.6vw; color: #888; }
+  /* 動きの確認用の帯: 1フレームごとに1マス進む(映像が止まっていないかを見る) */
+  #bar { display: flex; margin-top: 3vw; }
+  #bar i { width: 4vw; height: 4vw; margin: 0 .3vw; background: #222; }
+  #bar i.on { background: #0f0; }
+  body.flash { background: #fff; color: #000; }
+  body.flash #hint { color: #444; }
+</style>
+</head>
+<body>
+<div id="t">0000</div>
+<div id="f">frame 0</div>
+<div id="bar"></div>
+<div id="hint">クリック(タップ)で白黒が反転 / R キーで時計をリセット / F11 で全画面</div>
+<script>
+  // 表示は「リセットからの経過ミリ秒」。下 4 桁(0〜9999 ms)を大きく出す。
+  // 1 秒で桁が繰り上がるので、読み取りの時は「下 3 桁(ミリ秒)」と、
+  // 上の 1 桁(秒)の両方を見て、差を計算する。
+  let t0 = performance.now();
+  let frame = 0;
+  const t = document.getElementById("t");
+  const f = document.getElementById("f");
+  const bar = document.getElementById("bar");
+  const cells = [];
+  for (let i = 0; i < 10; i++) { const e = document.createElement("i"); bar.appendChild(e); cells.push(e); }
+
+  // クリック(スマホからのタップ)を受けた瞬間に、画面の白黒を反転する。
+  // スマホの画面録画で「タップした瞬間」と「反転がスマホに映った瞬間」の差を数えると、
+  // 操作の往復遅延(タップ → PC → 映像 → スマホ)が分かる。撮影用の端末が要らない。
+  // mousedown を使う(click はボタンを離すまで発火しないため、遅れが混ざる)。
+  document.addEventListener("mousedown", () => { document.body.classList.toggle("flash"); });
+  document.addEventListener("keydown", (e) => { if (e.key === "r" || e.key === "R") { t0 = performance.now(); frame = 0; } });
+
+  function tick(now) {
+    const ms = Math.floor(now - t0);
+    t.textContent = String(ms % 10000).padStart(4, "0");
+    f.textContent = "frame " + frame;
+    cells.forEach((c, i) => c.classList.toggle("on", i === frame % 10));
+    frame++;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

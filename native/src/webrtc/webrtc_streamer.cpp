@@ -364,38 +364,32 @@ private:
             }
         });
 
-        // --- [2] ICE候補収集完了コールバック ---
-        // 全てのICE候補の収集が完了した時にローカルSDPを生成して通知
-        // weak_ptr をキャプチャして PeerConnection の寿命を安全に管理
-        std::weak_ptr<rtc::PeerConnection> weak_peer_connection =
-            peer_connection;
-        peer_connection->onGatheringStateChange(
-            [context, weak_peer_connection](
-                rtc::PeerConnection::GatheringState state) {
+        // --- [2] ローカルSDP生成コールバック ---
+        // ローカルSDPができたら、ICE候補の収集完了を待たずに、すぐ通知する(Trickle ICE)。
+        // 候補は [3] の onLocalCandidate で、見つかるたびに後から送る。
+        // 以前は収集完了(GatheringState::Complete)まで待っていたが、応答しない STUN の
+        // 問い合わせがある回線(学校の Wi-Fi など)では完了まで約 24 秒かかり、
+        // その間クライアントに offer が届かず、映像が始まらなかった(2026/11/13)。
+        peer_connection->onLocalDescription(
+            [context](rtc::Description description) {
                 if (!context->active.load(std::memory_order_acquire)) {
                     return;
                 }
-                // Complete 状態（全候補収集完了）の時のみ処理
-                if (state != rtc::PeerConnection::GatheringState::Complete) {
-                    return;
-                }
-
-                auto peer_connection = weak_peer_connection.lock();
-                if (!peer_connection) {
-                    return;
-                }
-                // ローカルSDP（全ICE候補込み）を取得
-                auto description = peer_connection->localDescription();
-                if (!description) {
-                    return;
-                }
-
                 // SDPを上位層に通知（→Rust経由でブラウザに送信）
                 std::lock_guard<std::mutex> lock(context->mutex);
                 if (context->local_description) {
                     context->local_description(
-                        std::string(description.value()),
-                        description->typeString());
+                        std::string(description),
+                        description.typeString());
+                }
+            });
+
+        // 収集の完了は、ログに残すだけ(遅い回線の調査用)
+        peer_connection->onGatheringStateChange(
+            [](rtc::PeerConnection::GatheringState state) {
+                if (state == rtc::PeerConnection::GatheringState::Complete) {
+                    std::printf("[WebrtcStreamer] ICE gathering complete\n");
+                    std::fflush(stdout);
                 }
             });
 

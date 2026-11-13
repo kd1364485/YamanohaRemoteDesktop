@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>遅延測定用の時計</title>
+<style>
+  /* PC の画面に出して、Yamanoha で配信した映像と並べて撮る。
+     スマホでは PC の画面が縮んで映るので、数字はできるだけ大きく、白黒の強い対比にする。 */
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3vh;
+         font-family: Consolas, "Courier New", monospace; cursor: none; }
+  #time { font-size: 24vw; font-weight: 700; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  /* 数字がブレて読めないコマ用の予備: 100 ms の位と 10 ms の位を、10 個の箱のどれが光るかで示す */
+  .row { display: flex; gap: 1vw; }
+  .row div { width: 7vw; height: 7vh; border: 0.4vw solid #555; box-sizing: border-box; }
+  .row div.on { background: #fff; border-color: #fff; }
+  .label { font-size: 1.6vw; color: #888; }
+  #info { font-size: 1.4vw; color: #666; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div id="time">00.000</div>
+  <div class="label">100 ms の位</div>
+  <div class="row" id="hundreds"></div>
+  <div class="label">10 ms の位</div>
+  <div class="row" id="tens"></div>
+  <div id="info">クリックで全画面 / 画面の更新を測っています…</div>
+<script>
+  // 表示する値: 秒(60 で一周).ミリ秒。差を出すとき、60 秒をまたいでも calc.py が補正する。
+  // PC の時計と、配信された映像の中の時計は、同じ PC の同じ時計なので、時刻合わせは要らない。
+  const timeEl = document.getElementById("time");
+  const infoEl = document.getElementById("info");
+  const makeRow = (id) => {
+    const row = document.getElementById(id);
+    return Array.from({ length: 10 }, () => row.appendChild(document.createElement("div")));
+  };
+  const hundreds = makeRow("hundreds");
+  const tens = makeRow("tens");
+
+  // 画面の更新の間隔(この時計の読み取りの細かさの限界)を、requestAnimationFrame の間隔から見積もる
+  const intervals = [];
+  let last = 0;
+
+  function tick(now) {
+    const ms = Date.now() % 60000;
+    timeEl.textContent = (ms / 1000).toFixed(3).padStart(6, "0");
+    const h = Math.floor(ms / 100) % 10, t = Math.floor(ms / 10) % 10;
+    hundreds.forEach((el, i) => el.classList.toggle("on", i === h));
+    tens.forEach((el, i) => el.classList.toggle("on", i === t));
+
+    if (last) {
+      intervals.push(now - last);
+      if (intervals.length > 120) intervals.shift();
+      if (intervals.length === 120) {
+        const sorted = [...intervals].sort((a, b) => a - b);
+        const median = sorted[60];
+        infoEl.textContent =
+          `画面の更新: ${(1000 / median).toFixed(1)} Hz(数字は ${median.toFixed(1)} ms ごとに変わる)` +
+          ` / クリックで全画面`;
+      }
+    }
+    last = now;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  document.addEventListener("click", () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  });
+</script>
+</body>
+</html>
